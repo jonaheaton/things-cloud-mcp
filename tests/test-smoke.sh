@@ -4,9 +4,13 @@ set -euo pipefail
 # Smoke test — core daily workflow: create, read, complete, trash.
 # Designed to run regularly (e.g. daily cron) to detect Things Cloud API changes.
 # Usage: ./test-smoke.sh [base_url]
-# Example: ./test-smoke.sh http://localhost:8080
+# Example: BASE_URL=https://your-app-name.fly.dev ./test-smoke.sh
 
-BASE="${1:-http://localhost:8080}"
+BASE="${1:-${BASE_URL:-}}"
+if [ -z "${BASE}" ]; then
+  echo "Error: base URL is required. Pass as the first arg or set BASE_URL."
+  exit 1
+fi
 ENDPOINT="${BASE}/mcp"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="${SCRIPT_DIR}/test-results.log"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 type accountRequestBody struct {
@@ -16,9 +17,13 @@ type accountRequestBody struct {
 // AccountService allows account specific interaction with thingscloud
 type AccountService service
 
+func accountPath(email string) string {
+	return fmt.Sprintf("/version/1/account/%s", url.PathEscape(email))
+}
+
 // Delete deletes your current thingscloud account. This cannot be reversed
 func (s *AccountService) Delete() error {
-	req, err := http.NewRequest("DELETE", fmt.Sprintf("/version/1/account/%s", s.client.EMail), nil)
+	req, err := http.NewRequest("DELETE", accountPath(s.client.EMail), nil)
 	if err != nil {
 		return err
 	}
@@ -45,7 +50,7 @@ func (s *AccountService) AcceptSLA() error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PUT", fmt.Sprintf("/version/1/account/%s", s.client.EMail), bytes.NewBuffer(data))
+	req, err := http.NewRequest("PUT", accountPath(s.client.EMail), bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -73,7 +78,7 @@ func (s *AccountService) Confirm(code string) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest("PUT", fmt.Sprintf("/version/1/account/%s", s.client.EMail), bytes.NewBuffer(data))
+	req, err := http.NewRequest("PUT", accountPath(s.client.EMail), bytes.NewBuffer(data))
 	if err != nil {
 		return err
 	}
@@ -96,12 +101,12 @@ func (s *AccountService) Confirm(code string) error {
 // SignUp creates a new thingscloud account and returns a configured client
 func (s *AccountService) SignUp(email, password string) (*Client, error) {
 	data, err := json.Marshal(accountRequestBody{
-		Password:           password,
+		Password: password,
 	})
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("PUT", fmt.Sprintf("/version/1/account/%s", email), bytes.NewBuffer(data))
+	req, err := http.NewRequest("PUT", accountPath(email), bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +133,7 @@ func (s *AccountService) ChangePassword(newPassword string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest("PUT", fmt.Sprintf("/version/1/account/%s", s.client.EMail), bytes.NewBuffer(data))
+	req, err := http.NewRequest("PUT", accountPath(s.client.EMail), bytes.NewBuffer(data))
 	if err != nil {
 		return nil, err
 	}

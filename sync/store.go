@@ -11,14 +11,14 @@ import (
 // Returns nil, nil if the task is not found.
 func (s *Syncer) getTask(uuid string) (*things.Task, error) {
 	row := s.db.QueryRow(`
-		SELECT
-			uuid, type, title, note, status, schedule,
-			scheduled_date, deadline_date, completion_date, creation_date, modification_date,
-			"index", today_index, in_trash, area_uuid, project_uuid, heading_uuid,
-			alarm_time_offset, recurrence_rule, today_index_ref, deleted
-		FROM tasks
-		WHERE uuid = ?
-	`, uuid)
+			SELECT
+				uuid, type, title, note, status, schedule,
+				scheduled_date, deadline_date, completion_date, creation_date, modification_date,
+				"index", today_index, in_trash, area_uuid, project_uuid, heading_uuid,
+				alarm_time_offset, recurrence_rule, today_index_ref, deleted
+			FROM tasks
+			WHERE uuid = ? AND deleted = 0
+		`, uuid)
 
 	var (
 		t                things.Task
@@ -408,4 +408,26 @@ func (s *Syncer) logChange(serverIndex int, change Change, payload string) error
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, serverIndex, time.Now().Unix(), change.ChangeType(), change.EntityType(), change.EntityUUID(), payload)
 	return err
+}
+
+// purgeDeleted permanently removes rows already marked deleted and any
+// dependent junction rows so the local cache does not grow forever.
+func (s *Syncer) purgeDeleted() error {
+	statements := []string{
+		`DELETE FROM task_tags WHERE task_uuid IN (SELECT uuid FROM tasks WHERE deleted = 1)`,
+		`DELETE FROM task_tags WHERE tag_uuid IN (SELECT uuid FROM tags WHERE deleted = 1)`,
+		`DELETE FROM area_tags WHERE area_uuid IN (SELECT uuid FROM areas WHERE deleted = 1)`,
+		`DELETE FROM area_tags WHERE tag_uuid IN (SELECT uuid FROM tags WHERE deleted = 1)`,
+		`DELETE FROM checklist_items WHERE deleted = 1 OR task_uuid IN (SELECT uuid FROM tasks WHERE deleted = 1)`,
+		`DELETE FROM tasks WHERE deleted = 1`,
+		`DELETE FROM areas WHERE deleted = 1`,
+		`DELETE FROM tags WHERE deleted = 1`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := s.db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }

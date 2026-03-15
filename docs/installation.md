@@ -12,8 +12,8 @@ Self-host the Things Cloud MCP server to connect Claude (or any MCP-compatible A
 ## 1. Clone the repository
 
 ```bash
-git clone https://github.com/mattydsmith/things-cloud-mcp.git
-cd things-cloud-sdk
+git clone https://github.com/<your-account>/things-cloud-mcp.git
+cd things-cloud-mcp
 ```
 
 ## 2. Build locally (optional, to verify)

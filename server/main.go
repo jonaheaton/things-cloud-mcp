@@ -1,11 +1,17 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"strconv"
+	"syscall"
+	"time"
 
 	things "github.com/arthursoares/things-cloud-sdk"
 	"github.com/arthursoares/things-cloud-sdk/sync"
@@ -16,6 +22,17 @@ var (
 	syncer  *sync.Syncer
 	history *things.History
 )
+
+type initialSyncer interface {
+	Sync() ([]sync.Change, error)
+}
+
+type shutdownServer interface {
+	ListenAndServe() error
+	Shutdown(context.Context) error
+}
+
+const shutdownTimeout = 10 * time.Second
 
 func jsonResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -37,6 +54,27 @@ func handleVerify(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, resp)
 }
 
+func paginationQueryOpts(r *http.Request) (sync.QueryOpts, error) {
+	opts := sync.QueryOpts{}
+
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err := strconv.Atoi(raw)
+		if err != nil || limit < 0 {
+			return opts, fmt.Errorf("limit must be a non-negative integer")
+		}
+		opts.Limit = limit
+	}
+	if raw := r.URL.Query().Get("offset"); raw != "" {
+		offset, err := strconv.Atoi(raw)
+		if err != nil || offset < 0 {
+			return opts, fmt.Errorf("offset must be a non-negative integer")
+		}
+		opts.Offset = offset
+	}
+
+	return opts, nil
+}
+
 func handleSync(w http.ResponseWriter, r *http.Request) {
 	changes, err := syncer.Sync()
 	if err != nil {
@@ -49,12 +87,17 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleInbox(w http.ResponseWriter, r *http.Request) {
+	opts, err := paginationQueryOpts(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := syncForRead(); err != nil {
 		jsonError(w, fmt.Sprintf("pre-read sync failed: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	state := syncer.State()
-	tasks, err := state.TasksInInbox(sync.QueryOpts{})
+	tasks, err := state.TasksInInbox(opts)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to get inbox: %v", err), 500)
 		return
@@ -67,12 +110,17 @@ func handleInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleToday(w http.ResponseWriter, r *http.Request) {
+	opts, err := paginationQueryOpts(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := syncForRead(); err != nil {
 		jsonError(w, fmt.Sprintf("pre-read sync failed: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	state := syncer.State()
-	tasks, err := state.TasksInToday(sync.QueryOpts{})
+	tasks, err := state.TasksInToday(opts)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to get today: %v", err), 500)
 		return
@@ -85,12 +133,17 @@ func handleToday(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleProjects(w http.ResponseWriter, r *http.Request) {
+	opts, err := paginationQueryOpts(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := syncForRead(); err != nil {
 		jsonError(w, fmt.Sprintf("pre-read sync failed: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	state := syncer.State()
-	projects, err := state.AllProjects(sync.QueryOpts{})
+	projects, err := state.AllProjects(opts)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to get projects: %v", err), 500)
 		return
@@ -103,12 +156,17 @@ func handleProjects(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAreas(w http.ResponseWriter, r *http.Request) {
+	opts, err := paginationQueryOpts(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := syncForRead(); err != nil {
 		jsonError(w, fmt.Sprintf("pre-read sync failed: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	state := syncer.State()
-	areas, err := state.AllAreas()
+	areas, err := state.AllAreasWithOpts(opts)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to get areas: %v", err), 500)
 		return
@@ -121,12 +179,17 @@ func handleAreas(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleTags(w http.ResponseWriter, r *http.Request) {
+	opts, err := paginationQueryOpts(r)
+	if err != nil {
+		jsonError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if err := syncForRead(); err != nil {
 		jsonError(w, fmt.Sprintf("pre-read sync failed: %v", err), http.StatusServiceUnavailable)
 		return
 	}
 	state := syncer.State()
-	tags, err := state.AllTags()
+	tags, err := state.AllTagsWithOpts(opts)
 	if err != nil {
 		jsonError(w, fmt.Sprintf("failed to get tags: %v", err), 500)
 		return
@@ -191,6 +254,53 @@ func debugAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+func runInitialSync(s initialSyncer) error {
+	log.Println("Performing initial sync...")
+	changes, err := s.Sync()
+	if err != nil {
+		return fmt.Errorf("initial sync failed: %w", err)
+	}
+	log.Printf("Initial sync complete: %d changes", len(changes))
+	return nil
+}
+
+func serveWithGracefulShutdown(ctx context.Context, srv shutdownServer, timeout time.Duration) error {
+	serverStopped := make(chan struct{})
+	shutdownErrCh := make(chan error, 1)
+
+	go func() {
+		select {
+		case <-ctx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			shutdownErrCh <- srv.Shutdown(shutdownCtx)
+		case <-serverStopped:
+		}
+	}()
+
+	err := srv.ListenAndServe()
+	close(serverStopped)
+
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+
+	select {
+	case shutdownErr := <-shutdownErrCh:
+		if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
+			log.Printf("graceful shutdown failed: %v", shutdownErr)
+		}
+	case <-ctx.Done():
+		shutdownErr := <-shutdownErrCh
+		if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
+			log.Printf("graceful shutdown failed: %v", shutdownErr)
+		}
+	default:
+	}
+
+	return nil
+}
+
 func main() {
 	username := os.Getenv("THINGS_USERNAME")
 	password := os.Getenv("THINGS_PASSWORD")
@@ -213,12 +323,8 @@ func main() {
 	}
 	defer syncer.Close()
 
-	log.Println("Performing initial sync...")
-	changes, err := syncer.Sync()
-	if err != nil {
-		log.Printf("Warning: initial sync failed: %v", err)
-	} else {
-		log.Printf("Initial sync complete: %d changes", len(changes))
+	if err := runInitialSync(syncer); err != nil {
+		log.Fatal(err)
 	}
 
 	// Get history for write operations
@@ -292,7 +398,13 @@ func main() {
 		var body struct {
 			Key string `json:"key"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.Key != "" {
+		ok, err := decodeOptionalJSONBody(w, r, &body)
+		if err != nil {
+			if isRequestBodyTooLarge(err) {
+				jsonError(w, errRequestBodyTooLarge.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+		} else if ok && body.Key != "" {
 			keyToDelete = body.Key
 		}
 		h := client.HistoryWithID(keyToDelete)
@@ -347,7 +459,15 @@ func main() {
 		var body struct {
 			Code string `json:"code"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Code == "" {
+		if err := decodeJSONBody(w, r, &body); err != nil {
+			if isRequestBodyTooLarge(err) {
+				jsonError(w, errRequestBodyTooLarge.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+			jsonError(w, "JSON body with 'code' required", 400)
+			return
+		}
+		if body.Code == "" {
 			jsonError(w, "JSON body with 'code' required", 400)
 			return
 		}
@@ -367,8 +487,12 @@ func main() {
 	// MCP endpoint (no bearer auth — claude.ai connectors use OAuth which we don't implement)
 	http.Handle("/mcp", newMCPHandler())
 
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	server := &http.Server{Addr: ":" + port}
+
 	log.Printf("Starting server on :%s", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
+	if err := serveWithGracefulShutdown(shutdownCtx, server, shutdownTimeout); err != nil {
 		log.Fatal(err)
 	}
 }

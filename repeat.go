@@ -5,6 +5,8 @@ import "time"
 // FrequencyUnit describes recurring frequencies
 type FrequencyUnit int64
 
+const NeverendingRepeatYear = 4001
+
 var (
 	// FrequencyUnitDaily occurs every n days
 	FrequencyUnitDaily FrequencyUnit = 16
@@ -40,13 +42,53 @@ type RepeaterConfiguration struct {
 
 // IsNeverending determines if a recurring rule has a specific end
 func (c RepeaterConfiguration) IsNeverending() bool {
-	return c.LastScheduledAt != nil && c.LastScheduledAt.Time().Year() == 4001
+	return c.LastScheduledAt != nil && c.LastScheduledAt.Time().Year() == NeverendingRepeatYear
+}
+
+func (c RepeaterConfiguration) firstScheduledTime() (time.Time, bool) {
+	if c.FirstScheduledAt == nil {
+		return time.Time{}, false
+	}
+	return *c.FirstScheduledAt.Time(), true
+}
+
+func hasValidDetailConfiguration(details []RepeaterDetailConfiguration, isValid func(RepeaterDetailConfiguration) bool) bool {
+	if len(details) == 0 {
+		return false
+	}
+	for _, dc := range details {
+		if !isValid(dc) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c RepeaterConfiguration) hasValidWeeklyDetails() bool {
+	return hasValidDetailConfiguration(c.DetailConfiguration, func(dc RepeaterDetailConfiguration) bool {
+		return dc.Weekday != nil
+	})
+}
+
+func (c RepeaterConfiguration) hasValidMonthlyDetails() bool {
+	return hasValidDetailConfiguration(c.DetailConfiguration, func(dc RepeaterDetailConfiguration) bool {
+		return dc.Day != nil || (dc.MonthOf != nil && dc.Weekday != nil)
+	})
+}
+
+func (c RepeaterConfiguration) hasValidYearlyDetails() bool {
+	return hasValidDetailConfiguration(c.DetailConfiguration, func(dc RepeaterDetailConfiguration) bool {
+		return (dc.Day != nil && dc.Month != nil) || (dc.MonthOf != nil && dc.Weekday != nil && dc.Month != nil)
+	})
 }
 
 func (c RepeaterConfiguration) nextScheduledAt(repeat int, dcF func(time.Time, RepeaterDetailConfiguration) time.Time, aF func(time.Time) time.Time) time.Time {
-	ia := *c.FirstScheduledAt.Time()
+	ia, ok := c.firstScheduledTime()
+	if !ok || len(c.DetailConfiguration) == 0 {
+		return time.Time{}
+	}
 
-	if !c.IsNeverending() && *c.RepeatCount > 0 {
+	if !c.IsNeverending() && c.RepeatCount != nil && *c.RepeatCount > 0 {
 		if repeat >= int(*c.RepeatCount) {
 			return time.Time{}
 		}
@@ -76,6 +118,9 @@ func (c RepeaterConfiguration) nextScheduledAt(repeat int, dcF func(time.Time, R
 }
 
 func (c RepeaterConfiguration) nextWeeklyScheduledAt(repeat int) time.Time {
+	if !c.hasValidWeeklyDetails() {
+		return time.Time{}
+	}
 	return c.nextScheduledAt(repeat, func(t time.Time, dc RepeaterDetailConfiguration) time.Time {
 		return t.AddDate(0, 0, int(*dc.Weekday-t.Weekday()))
 	}, func(t time.Time) time.Time {
@@ -84,6 +129,9 @@ func (c RepeaterConfiguration) nextWeeklyScheduledAt(repeat int) time.Time {
 }
 
 func (c RepeaterConfiguration) computeFirstWeeklyScheduleAt(t time.Time) time.Time {
+	if !c.hasValidWeeklyDetails() {
+		return time.Time{}
+	}
 	d := c.DetailConfiguration[0]
 	for _, dc := range c.DetailConfiguration {
 		if *dc.Weekday < *d.Weekday {
@@ -100,6 +148,9 @@ func (c RepeaterConfiguration) computeFirstWeeklyScheduleAt(t time.Time) time.Ti
 }
 
 func (c RepeaterConfiguration) computeFirstMonthlyScheduleAt(t time.Time) time.Time {
+	if !c.hasValidMonthlyDetails() {
+		return time.Time{}
+	}
 	min := t.AddDate(1, 0, 0)
 	for _, dc := range c.DetailConfiguration {
 		var d time.Time
@@ -108,8 +159,7 @@ func (c RepeaterConfiguration) computeFirstMonthlyScheduleAt(t time.Time) time.T
 			if d.Before(t) {
 				d = t.AddDate(0, 1, -t.Day()+int(*dc.Day)+1)
 			}
-		}
-		if dc.Weekday != nil {
+		} else if dc.Weekday != nil && dc.MonthOf != nil {
 			if *dc.MonthOf == -1 {
 				d = lastWeekdayOfMonth(t, *dc.Weekday)
 			} else {
@@ -124,18 +174,20 @@ func (c RepeaterConfiguration) computeFirstMonthlyScheduleAt(t time.Time) time.T
 }
 
 func (c RepeaterConfiguration) computeFirstYearlyScheduleAt(t time.Time) time.Time {
+	if !c.hasValidYearlyDetails() {
+		return time.Time{}
+	}
 	min := t.AddDate(1, 0, 0)
 	for _, dc := range c.DetailConfiguration {
 		var d time.Time
-		if dc.Day != nil {
+		if dc.Day != nil && dc.Month != nil {
 			d = nthDayOfMonthOfYear(t, int(*dc.Month), int(*dc.Day))
 			if d.Before(t) {
 				d = nthDayOfMonthOfYear(t.AddDate(1, 0, 0), int(*dc.Month), int(*dc.Day))
 			}
-		}
-		if dc.Weekday != nil {
+		} else if dc.Weekday != nil && dc.MonthOf != nil && dc.Month != nil {
 			nt := nthDayOfMonthOfYear(t, int(*dc.Month), 1)
-			if dc.MonthOf != nil && *dc.MonthOf == -1 {
+			if *dc.MonthOf == -1 {
 				d = lastWeekdayOfMonth(nt, *dc.Weekday)
 				if d.Before(t) {
 					d = lastWeekdayOfMonth(nt.AddDate(1, 0, 0), *dc.Weekday)
@@ -208,6 +260,9 @@ func lastDayOfMonth(t time.Time) time.Time {
 }
 
 func (c RepeaterConfiguration) nextMonthlyScheduledAt(repeat int) time.Time {
+	if !c.hasValidMonthlyDetails() {
+		return time.Time{}
+	}
 	return c.nextScheduledAt(repeat, func(t time.Time, dc RepeaterDetailConfiguration) time.Time {
 		if dc.MonthOf != nil && dc.Weekday != nil {
 			nt := t.AddDate(0, 0, -t.Day()+1)
@@ -216,6 +271,9 @@ func (c RepeaterConfiguration) nextMonthlyScheduledAt(repeat int) time.Time {
 				return lastWeekdayOfMonth(nt, *dc.Weekday)
 			}
 			return nthWeekdayOfMonth(nt, *dc.Weekday, int(*dc.MonthOf))
+		}
+		if dc.Day == nil {
+			return time.Time{}
 		}
 		if *dc.Day == -1 {
 			return t.AddDate(0, 1, -t.Day())
@@ -227,7 +285,7 @@ func (c RepeaterConfiguration) nextMonthlyScheduledAt(repeat int) time.Time {
 			// correct last day of month
 			if c.DetailConfiguration[0].Day != nil && *c.DetailConfiguration[0].Day == -1 {
 				nt = nt.AddDate(0, 1, -nt.Day())
-			} else if c.DetailConfiguration[0].MonthOf != nil {
+			} else if c.DetailConfiguration[0].MonthOf != nil && c.DetailConfiguration[0].Weekday != nil {
 				if *c.DetailConfiguration[0].MonthOf == -1 {
 					nt = lastWeekdayOfMonth(nt, *c.DetailConfiguration[0].Weekday)
 				} else {
@@ -245,14 +303,20 @@ func nthDayOfMonthOfYear(t time.Time, month, day int) time.Time {
 }
 
 func (c RepeaterConfiguration) nextYearlyScheduledAt(repeat int) time.Time {
+	if !c.hasValidYearlyDetails() {
+		return time.Time{}
+	}
 	return c.nextScheduledAt(repeat, func(t time.Time, dc RepeaterDetailConfiguration) time.Time {
-		if dc.MonthOf != nil && dc.Weekday != nil {
+		if dc.MonthOf != nil && dc.Weekday != nil && dc.Month != nil {
 			nt := nthDayOfMonthOfYear(t, int(*dc.Month), 1)
 
 			if *dc.MonthOf == -1 {
 				return lastWeekdayOfMonth(nt, *dc.Weekday)
 			}
 			return nthWeekdayOfMonth(nt, *dc.Weekday, int(*dc.MonthOf))
+		}
+		if dc.Day == nil || dc.Month == nil {
+			return time.Time{}
 		}
 		if *dc.Day == -1 {
 			return lastDayOfMonth(nthDayOfMonthOfYear(t, int(*dc.Month), 1))
@@ -263,12 +327,15 @@ func (c RepeaterConfiguration) nextYearlyScheduledAt(repeat int) time.Time {
 		nt := t.AddDate(int(c.FrequencyAmplitude), 0, 0)
 		if len(c.DetailConfiguration) == 1 {
 			// correct last day of month
-			if c.DetailConfiguration[0].MonthOf != nil {
+			if c.DetailConfiguration[0].MonthOf != nil && c.DetailConfiguration[0].Weekday != nil && c.DetailConfiguration[0].Month != nil {
 				nt = nthDayOfMonthOfYear(nt, int(*c.DetailConfiguration[0].Month), 1)
 				if *c.DetailConfiguration[0].MonthOf == -1 {
 					return lastWeekdayOfMonth(nt, *c.DetailConfiguration[0].Weekday)
 				}
 				return nthWeekdayOfMonth(nt, *c.DetailConfiguration[0].Weekday, int(*c.DetailConfiguration[0].MonthOf))
+			}
+			if c.DetailConfiguration[0].Day == nil {
+				return time.Time{}
 			}
 			if *c.DetailConfiguration[0].Day == -1 {
 				return firstDayOfMonth(t).AddDate(int(c.FrequencyAmplitude), 1, -1)
@@ -279,7 +346,10 @@ func (c RepeaterConfiguration) nextYearlyScheduledAt(repeat int) time.Time {
 }
 
 func (c RepeaterConfiguration) nextDailyScheduledAt(repeat int) time.Time {
-	ia := *c.FirstScheduledAt.Time()
+	ia, ok := c.firstScheduledTime()
+	if !ok {
+		return time.Time{}
+	}
 
 	nt := ia.AddDate(0, 0, int(c.FrequencyAmplitude)*repeat)
 
@@ -292,6 +362,9 @@ func (c RepeaterConfiguration) nextDailyScheduledAt(repeat int) time.Time {
 			return time.Time{}
 		}
 	} else {
+		if c.RepeatCount == nil {
+			return nt
+		}
 		if repeat >= int(*c.RepeatCount) {
 			return time.Time{}
 		}

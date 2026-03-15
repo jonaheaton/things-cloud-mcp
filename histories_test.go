@@ -1,12 +1,22 @@
 package thingscloud
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 )
 
 type testIdentifiable struct {
 	id string
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func (i testIdentifiable) UUID() string {
@@ -127,6 +137,35 @@ func TestHistory_Sync(t *testing.T) {
 }
 
 func TestHistory_Write(t *testing.T) {
+	t.Run("StatusError", func(t *testing.T) {
+		t.Parallel()
+
+		c := New("https://example.com", "martin@example.com", "")
+		c.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusConflict,
+				Status:     "409 Conflict",
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"error":"conflict"}`)),
+				Request:    req,
+			}, nil
+		})
+
+		h := History{Client: c, ID: "33333abb-bfe4-4b03-a5c9-106d42220c72", LatestServerIndex: 1}
+		err := h.Write(testIdentifiable{id: "abc123"})
+		if err == nil {
+			t.Fatal("expected conflict write to fail")
+		}
+
+		var statusErr *HTTPStatusError
+		if !errors.As(err, &statusErr) {
+			t.Fatalf("expected HTTPStatusError, got %T: %v", err, err)
+		}
+		if statusErr.StatusCode != http.StatusConflict {
+			t.Fatalf("expected status code %d, got %d", http.StatusConflict, statusErr.StatusCode)
+		}
+	})
+
 	t.Run("InvalidJSON", func(t *testing.T) {
 		t.Parallel()
 		server := fakeBodyServer(200, "{")

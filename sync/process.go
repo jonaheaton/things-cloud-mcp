@@ -24,18 +24,18 @@ func (s *Syncer) processItems(items []things.Item, baseIndex int) ([]Change, err
 	}
 	defer tx.Rollback() // No-op if committed
 
-	// Store original db, swap in transaction
-	origDB := s.db
-	s.db = tx
-	defer func() { s.db = origDB }()
+	txSyncer := s.withDB(tx)
 
 	var allChanges []Change
 
 	for i, item := range items {
 		serverIndex := baseIndex + i
+		if item.ServerIndex != nil {
+			serverIndex = *item.ServerIndex
+		}
 		ts := time.Now()
 
-		changes, err := s.processItem(item, serverIndex, ts)
+		changes, err := txSyncer.processItem(item, serverIndex, ts)
 		if err != nil {
 			return nil, fmt.Errorf("processing item %s: %w", item.UUID, err)
 		}
@@ -43,7 +43,7 @@ func (s *Syncer) processItems(items []things.Item, baseIndex int) ([]Change, err
 		// Log each change
 		for _, change := range changes {
 			payload, _ := json.Marshal(item.P)
-			if err := s.logChange(serverIndex, change, string(payload)); err != nil {
+			if err := txSyncer.logChange(serverIndex, change, string(payload)); err != nil {
 				return nil, fmt.Errorf("logging change: %w", err)
 			}
 		}
@@ -118,7 +118,12 @@ func (s *Syncer) processTaskItem(item things.Item, serverIndex int, ts time.Time
 	}
 
 	// Detect and return changes
-	return detectTaskChanges(old, newTask, serverIndex, ts), nil
+	changes := detectTaskChanges(old, newTask, serverIndex, ts)
+	assignmentChanges, err := s.detectTaskAssignmentChanges(old, newTask, serverIndex, ts)
+	if err != nil {
+		return nil, fmt.Errorf("detecting task assignments: %w", err)
+	}
+	return append(changes, assignmentChanges...), nil
 }
 
 // processAreaItem handles area items.
@@ -408,6 +413,11 @@ func applyTaskPayload(old *things.Task, uuid string, p things.TaskActionItemPayl
 			t.TodayIndexReference = p.TaskIR.Time()
 		}
 	}
+	if (p.HasScheduledDate() || p.Schedule != nil) && !p.HasTaskIR() {
+		// A reschedule without tir means the task no longer carries an
+		// explicit Today placement from the previous state.
+		t.TodayIndexReference = nil
+	}
 	if p.HasCompletionDate() {
 		t.CompletionDate = nil
 		if p.CompletionDate != nil {
@@ -466,6 +476,90 @@ func applyTaskPayload(old *things.Task, uuid string, p things.TaskActionItemPayl
 	}
 
 	return t
+}
+
+func (s *Syncer) detectTaskAssignmentChanges(old, new *things.Task, serverIndex int, ts time.Time) ([]Change, error) {
+	if old == nil || new == nil || new.Type != things.TaskTypeTask {
+		return nil, nil
+	}
+
+	base := baseChange{serverIndex: serverIndex, timestamp: ts}
+	tc := taskChange{baseChange: base, Task: new}
+	var changes []Change
+
+	oldParentID := firstID(old.ParentTaskIDs)
+	newParentID := firstID(new.ParentTaskIDs)
+	if oldParentID != newParentID {
+		oldProject, err := s.lookupProjectContainer(oldParentID)
+		if err != nil {
+			return nil, err
+		}
+		newProject, err := s.lookupProjectContainer(newParentID)
+		if err != nil {
+			return nil, err
+		}
+		if oldProject != nil || newProject != nil {
+			changes = append(changes, TaskAssignedToProject{
+				taskChange: tc,
+				Project:    newProject,
+				OldProject: oldProject,
+			})
+		}
+	}
+
+	oldAreaID := firstID(old.AreaIDs)
+	newAreaID := firstID(new.AreaIDs)
+	if oldAreaID != newAreaID {
+		oldArea, err := s.lookupArea(oldAreaID)
+		if err != nil {
+			return nil, err
+		}
+		newArea, err := s.lookupArea(newAreaID)
+		if err != nil {
+			return nil, err
+		}
+		if oldArea != nil || newArea != nil {
+			changes = append(changes, TaskAssignedToArea{
+				taskChange: tc,
+				Area:       newArea,
+				OldArea:    oldArea,
+			})
+		}
+	}
+
+	return changes, nil
+}
+
+func firstID(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
+}
+
+func (s *Syncer) lookupProjectContainer(uuid string) (*things.Task, error) {
+	if uuid == "" {
+		return nil, nil
+	}
+	task, err := s.getTask(uuid)
+	if err != nil {
+		return nil, fmt.Errorf("getting project %s: %w", uuid, err)
+	}
+	if task == nil || task.Type != things.TaskTypeProject {
+		return nil, nil
+	}
+	return task, nil
+}
+
+func (s *Syncer) lookupArea(uuid string) (*things.Area, error) {
+	if uuid == "" {
+		return nil, nil
+	}
+	area, err := s.getArea(uuid)
+	if err != nil {
+		return nil, fmt.Errorf("getting area %s: %w", uuid, err)
+	}
+	return area, nil
 }
 
 // parseNotePayload parses the note field from a task payload.

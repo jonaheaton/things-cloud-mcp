@@ -9,38 +9,51 @@ import (
 
 // State provides read-only access to the synced Things state
 type State struct {
-	db dbExecutor
+	syncer *Syncer
 }
 
 // State returns a read-only view of the current aggregated state
 func (s *Syncer) State() *State {
-	return &State{db: s.rawDB}
+	return &State{syncer: s}
+}
+
+func (st *State) executor() dbExecutor {
+	return st.syncer.rawDB
 }
 
 // QueryOpts controls filtering for state queries
 type QueryOpts struct {
 	IncludeCompleted bool
 	IncludeTrashed   bool
+	Limit            int
+	Offset           int
 }
 
 // Task retrieves a task by UUID
 func (st *State) Task(uuid string) (*things.Task, error) {
-	return (&Syncer{db: st.db}).getTask(uuid)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+	return st.syncer.readSyncer().getTask(uuid)
 }
 
 // Area retrieves an area by UUID
 func (st *State) Area(uuid string) (*things.Area, error) {
-	return (&Syncer{db: st.db}).getArea(uuid)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+	return st.syncer.readSyncer().getArea(uuid)
 }
 
 // Tag retrieves a tag by UUID
 func (st *State) Tag(uuid string) (*things.Tag, error) {
-	return (&Syncer{db: st.db}).getTag(uuid)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+	return st.syncer.readSyncer().getTag(uuid)
 }
 
 // AllTasks returns all tasks matching the query options
 func (st *State) AllTasks(opts QueryOpts) ([]*things.Task, error) {
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND deleted = 0`
+	args := []any{}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -48,12 +61,14 @@ func (st *State) AllTasks(opts QueryOpts) ([]*things.Task, error) {
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY "index"`
-	return st.queryTasks(query)
+	query, args = paginateQuery(query, args, opts)
+	return st.queryTasks(query, args...)
 }
 
 // AllProjects returns all projects
 func (st *State) AllProjects(opts QueryOpts) ([]*things.Task, error) {
 	query := `SELECT uuid FROM tasks WHERE type = 1 AND deleted = 0`
+	args := []any{}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -61,12 +76,25 @@ func (st *State) AllProjects(opts QueryOpts) ([]*things.Task, error) {
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY "index"`
-	return st.queryTasks(query)
+	query, args = paginateQuery(query, args, opts)
+	return st.queryTasks(query, args...)
 }
 
 // AllAreas returns all areas
 func (st *State) AllAreas() ([]*things.Area, error) {
-	rows, err := st.db.Query(`SELECT uuid, title FROM areas WHERE deleted = 0 ORDER BY "index"`)
+	return st.AllAreasWithOpts(QueryOpts{})
+}
+
+// AllAreasWithOpts returns areas with optional pagination.
+func (st *State) AllAreasWithOpts(opts QueryOpts) ([]*things.Area, error) {
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	query := `SELECT uuid, title FROM areas WHERE deleted = 0 ORDER BY "index"`
+	args := []any{}
+	query, args = paginateQuery(query, args, opts)
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +113,19 @@ func (st *State) AllAreas() ([]*things.Area, error) {
 
 // AllTags returns all tags
 func (st *State) AllTags() ([]*things.Tag, error) {
-	rows, err := st.db.Query(`SELECT uuid, title, shortcut FROM tags WHERE deleted = 0 ORDER BY "index"`)
+	return st.AllTagsWithOpts(QueryOpts{})
+}
+
+// AllTagsWithOpts returns tags with optional pagination.
+func (st *State) AllTagsWithOpts(opts QueryOpts) ([]*things.Tag, error) {
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	query := `SELECT uuid, title, shortcut FROM tags WHERE deleted = 0 ORDER BY "index"`
+	args := []any{}
+	query, args = paginateQuery(query, args, opts)
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -105,6 +145,7 @@ func (st *State) AllTags() ([]*things.Tag, error) {
 // TasksInInbox returns tasks in the Inbox
 func (st *State) TasksInInbox(opts QueryOpts) ([]*things.Task, error) {
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND schedule = 0 AND deleted = 0`
+	args := []any{}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -112,7 +153,8 @@ func (st *State) TasksInInbox(opts QueryOpts) ([]*things.Task, error) {
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY "index"`
-	return st.queryTasks(query)
+	query, args = paginateQuery(query, args, opts)
+	return st.queryTasks(query, args...)
 }
 
 // TasksInToday returns tasks in the Today view. A task appears in Today when
@@ -131,6 +173,7 @@ func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
 			(scheduled_date >= ? AND scheduled_date < ?)
 			OR (today_index_ref >= ? AND today_index_ref < ?)
 		) AND deleted = 0`
+	args := []any{todayUnix, tomorrowUnix, todayUnix, tomorrowUnix}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -138,8 +181,12 @@ func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY today_index, "index"`
+	query, args = paginateQuery(query, args, opts)
 
-	rows, err := st.db.Query(query, todayUnix, tomorrowUnix, todayUnix, tomorrowUnix)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -150,6 +197,7 @@ func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
 // TasksInProject returns tasks belonging to a project
 func (st *State) TasksInProject(projectUUID string, opts QueryOpts) ([]*things.Task, error) {
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND project_uuid = ? AND deleted = 0`
+	args := []any{projectUUID}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -157,8 +205,12 @@ func (st *State) TasksInProject(projectUUID string, opts QueryOpts) ([]*things.T
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY "index"`
+	query, args = paginateQuery(query, args, opts)
 
-	rows, err := st.db.Query(query, projectUUID)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +221,7 @@ func (st *State) TasksInProject(projectUUID string, opts QueryOpts) ([]*things.T
 // TasksInArea returns tasks belonging to an area
 func (st *State) TasksInArea(areaUUID string, opts QueryOpts) ([]*things.Task, error) {
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND area_uuid = ? AND deleted = 0`
+	args := []any{areaUUID}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -176,8 +229,12 @@ func (st *State) TasksInArea(areaUUID string, opts QueryOpts) ([]*things.Task, e
 		query += " AND in_trash = 0"
 	}
 	query += ` ORDER BY "index"`
+	query, args = paginateQuery(query, args, opts)
 
-	rows, err := st.db.Query(query, areaUUID)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -210,7 +267,10 @@ func (st *State) CompletedTasksInRange(limit int, completedAfter, completedBefor
 	query += ` ORDER BY completion_date DESC LIMIT ?`
 	args = append(args, limit)
 
-	rows, err := st.db.Query(query, args...)
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -220,10 +280,13 @@ func (st *State) CompletedTasksInRange(limit int, completedAfter, completedBefor
 
 // ChecklistItems returns checklist items for a task
 func (st *State) ChecklistItems(taskUUID string) ([]*things.CheckListItem, error) {
-	rows, err := st.db.Query(`
-		SELECT uuid, title, status, "index"
-		FROM checklist_items
-		WHERE task_uuid = ? AND deleted = 0
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(`
+			SELECT uuid, title, status, "index"
+			FROM checklist_items
+			WHERE task_uuid = ? AND deleted = 0
 		ORDER BY "index"
 	`, taskUUID)
 	if err != nil {
@@ -247,8 +310,28 @@ func (st *State) ChecklistItems(taskUUID string) ([]*things.CheckListItem, error
 
 // Helper methods
 
-func (st *State) queryTasks(query string) ([]*things.Task, error) {
-	rows, err := st.db.Query(query)
+func paginateQuery(query string, args []any, opts QueryOpts) (string, []any) {
+	if opts.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, opts.Limit)
+		if opts.Offset > 0 {
+			query += " OFFSET ?"
+			args = append(args, opts.Offset)
+		}
+		return query, args
+	}
+	if opts.Offset > 0 {
+		query += " LIMIT -1 OFFSET ?"
+		args = append(args, opts.Offset)
+	}
+	return query, args
+}
+
+func (st *State) queryTasks(query string, args ...any) ([]*things.Task, error) {
+	st.syncer.mu.RLock()
+	defer st.syncer.mu.RUnlock()
+
+	rows, err := st.executor().Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +341,7 @@ func (st *State) queryTasks(query string) ([]*things.Task, error) {
 
 func (st *State) scanTaskUUIDs(rows *sql.Rows) ([]*things.Task, error) {
 	var tasks []*things.Task
-	syncer := &Syncer{db: st.db}
+	syncer := st.syncer.readSyncer()
 
 	for rows.Next() {
 		var uuid string

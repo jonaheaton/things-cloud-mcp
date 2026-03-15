@@ -75,6 +75,22 @@ func TestTaskStorage(t *testing.T) {
 		if deleted != 1 {
 			t.Error("task not marked as deleted")
 		}
+
+		retrieved, err := syncer.getTask("to-delete")
+		if err != nil {
+			t.Fatalf("getTask after delete failed: %v", err)
+		}
+		if retrieved != nil {
+			t.Fatal("expected soft-deleted task to be hidden from getTask")
+		}
+
+		stateTask, err := syncer.State().Task("to-delete")
+		if err != nil {
+			t.Fatalf("State().Task after delete failed: %v", err)
+		}
+		if stateTask != nil {
+			t.Fatal("expected soft-deleted task to be hidden from State().Task")
+		}
 	})
 
 	t.Run("save task with all optional fields", func(t *testing.T) {
@@ -203,6 +219,99 @@ func TestTaskStorage(t *testing.T) {
 		retrieved, _ := syncer.getTask("task-tags")
 		if len(retrieved.TagIDs) != 2 {
 			t.Errorf("TagIDs not updated: got %v", retrieved.TagIDs)
+		}
+	})
+
+	t.Run("purge deleted rows and junctions", func(t *testing.T) {
+		deletedTask := &things.Task{
+			UUID:     "task-purge",
+			Title:    "Delete Task",
+			Status:   things.TaskStatusPending,
+			Schedule: things.TaskScheduleAnytime,
+			Type:     things.TaskTypeTask,
+			TagIDs:   []string{"tag-purge"},
+		}
+		keptTask := &things.Task{
+			UUID:     "task-keep",
+			Title:    "Keep Task",
+			Status:   things.TaskStatusPending,
+			Schedule: things.TaskScheduleAnytime,
+			Type:     things.TaskTypeTask,
+			TagIDs:   []string{"tag-keep"},
+		}
+		if err := syncer.saveTag(&things.Tag{UUID: "tag-purge", Title: "Delete Tag"}); err != nil {
+			t.Fatalf("saveTag delete failed: %v", err)
+		}
+		if err := syncer.saveTag(&things.Tag{UUID: "tag-keep", Title: "Keep Tag"}); err != nil {
+			t.Fatalf("saveTag keep failed: %v", err)
+		}
+		if err := syncer.saveArea(&things.Area{UUID: "area-purge", Title: "Delete Area"}); err != nil {
+			t.Fatalf("saveArea delete failed: %v", err)
+		}
+		if err := syncer.saveArea(&things.Area{UUID: "area-keep", Title: "Keep Area"}); err != nil {
+			t.Fatalf("saveArea keep failed: %v", err)
+		}
+		if err := syncer.saveTask(deletedTask); err != nil {
+			t.Fatalf("saveTask delete failed: %v", err)
+		}
+		if err := syncer.saveTask(keptTask); err != nil {
+			t.Fatalf("saveTask keep failed: %v", err)
+		}
+		if err := syncer.saveChecklistItem(&things.CheckListItem{UUID: "check-purge", TaskIDs: []string{"task-purge"}, Title: "Delete Check"}); err != nil {
+			t.Fatalf("saveChecklistItem delete failed: %v", err)
+		}
+		if err := syncer.saveChecklistItem(&things.CheckListItem{UUID: "check-keep", TaskIDs: []string{"task-keep"}, Title: "Keep Check"}); err != nil {
+			t.Fatalf("saveChecklistItem keep failed: %v", err)
+		}
+		if _, err := syncer.db.Exec(`INSERT INTO area_tags (area_uuid, tag_uuid) VALUES ('area-purge', 'tag-purge'), ('area-keep', 'tag-keep')`); err != nil {
+			t.Fatalf("insert area_tags failed: %v", err)
+		}
+
+		if err := syncer.markTaskDeleted("task-purge"); err != nil {
+			t.Fatalf("markTaskDeleted failed: %v", err)
+		}
+		if err := syncer.markTagDeleted("tag-purge"); err != nil {
+			t.Fatalf("markTagDeleted failed: %v", err)
+		}
+		if err := syncer.markAreaDeleted("area-purge"); err != nil {
+			t.Fatalf("markAreaDeleted failed: %v", err)
+		}
+		if err := syncer.markChecklistItemDeleted("check-purge"); err != nil {
+			t.Fatalf("markChecklistItemDeleted failed: %v", err)
+		}
+
+		if err := syncer.purgeDeleted(); err != nil {
+			t.Fatalf("purgeDeleted failed: %v", err)
+		}
+
+		counts := []struct {
+			name  string
+			query string
+			arg   string
+			want  int
+		}{
+			{name: "tasks.task-purge", query: `SELECT COUNT(*) FROM tasks WHERE uuid = ?`, arg: "task-purge", want: 0},
+			{name: "tasks.task-keep", query: `SELECT COUNT(*) FROM tasks WHERE uuid = ?`, arg: "task-keep", want: 1},
+			{name: "tags.tag-purge", query: `SELECT COUNT(*) FROM tags WHERE uuid = ?`, arg: "tag-purge", want: 0},
+			{name: "tags.tag-keep", query: `SELECT COUNT(*) FROM tags WHERE uuid = ?`, arg: "tag-keep", want: 1},
+			{name: "areas.area-purge", query: `SELECT COUNT(*) FROM areas WHERE uuid = ?`, arg: "area-purge", want: 0},
+			{name: "areas.area-keep", query: `SELECT COUNT(*) FROM areas WHERE uuid = ?`, arg: "area-keep", want: 1},
+			{name: "checklist_items.check-purge", query: `SELECT COUNT(*) FROM checklist_items WHERE uuid = ?`, arg: "check-purge", want: 0},
+			{name: "checklist_items.check-keep", query: `SELECT COUNT(*) FROM checklist_items WHERE uuid = ?`, arg: "check-keep", want: 1},
+			{name: "task_tags.task-purge", query: `SELECT COUNT(*) FROM task_tags WHERE task_uuid = ?`, arg: "task-purge", want: 0},
+			{name: "task_tags.task-keep", query: `SELECT COUNT(*) FROM task_tags WHERE task_uuid = ?`, arg: "task-keep", want: 1},
+			{name: "area_tags.area-purge", query: `SELECT COUNT(*) FROM area_tags WHERE area_uuid = ?`, arg: "area-purge", want: 0},
+			{name: "area_tags.area-keep", query: `SELECT COUNT(*) FROM area_tags WHERE area_uuid = ?`, arg: "area-keep", want: 1},
+		}
+
+		for _, tc := range counts {
+			var got int
+			if err := syncer.db.QueryRow(tc.query, tc.arg).Scan(&got); err != nil {
+				t.Fatalf("count %s failed: %v", tc.name, err)
+			}
+			if got != tc.want {
+				t.Fatalf("%s count = %d, want %d", tc.name, got, tc.want)
+			}
 		}
 	})
 }

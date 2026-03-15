@@ -47,3 +47,55 @@ func TestHistory_Items(t *testing.T) {
 		}
 	})
 }
+
+func TestFlattenItemsPreservesServerSlotIndex(t *testing.T) {
+	items := flattenItems([]map[string]Item{
+		{
+			"task-1": {
+				Kind:   ItemKindTask,
+				Action: ItemActionCreated,
+			},
+		},
+		{
+			"checklist-1": {
+				Kind:   ItemKindChecklistItem,
+				Action: ItemActionCreated,
+			},
+			"Settings": {
+				Kind:   ItemKindSettings,
+				Action: ItemActionModified,
+			},
+		},
+		{
+			"tag-1": {
+				Kind:   ItemKindTag,
+				Action: ItemActionCreated,
+			},
+		},
+	}, 7)
+
+	if len(items) != 4 {
+		t.Fatalf("expected 4 flattened items, got %d", len(items))
+	}
+
+	indices := make(map[string]int, len(items))
+	for _, item := range items {
+		if item.ServerIndex == nil {
+			t.Fatalf("expected ServerIndex for %s", item.UUID)
+		}
+		indices[item.UUID] = *item.ServerIndex
+	}
+
+	if indices["task-1"] != 7 {
+		t.Fatalf("task-1 server index = %d, want 7", indices["task-1"])
+	}
+	if indices["checklist-1"] != 8 {
+		t.Fatalf("checklist-1 server index = %d, want 8", indices["checklist-1"])
+	}
+	if indices["Settings"] != 8 {
+		t.Fatalf("Settings server index = %d, want 8", indices["Settings"])
+	}
+	if indices["tag-1"] != 9 {
+		t.Fatalf("tag-1 server index = %d, want 9", indices["tag-1"])
+	}
+}

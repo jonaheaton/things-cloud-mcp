@@ -1,6 +1,6 @@
 package sync
 
-const schemaVersion = 3
+const schemaVersion = 4
 
 const schema = `
 -- Schema version tracking
@@ -131,6 +131,19 @@ ALTER TABLE tasks ADD COLUMN today_index_ref INTEGER;
 CREATE INDEX IF NOT EXISTS idx_tasks_today_index_ref ON tasks(today_index_ref);
 `
 
+// migration4 invalidates the local cache so previously corrupted sr/tir state
+// is rebuilt from Things Cloud history on the next sync.
+const migration4 = `
+DELETE FROM task_tags;
+DELETE FROM area_tags;
+DELETE FROM checklist_items;
+DELETE FROM tasks;
+DELETE FROM areas;
+DELETE FROM tags;
+DELETE FROM change_log;
+DELETE FROM sync_state;
+`
+
 func (s *Syncer) migrate() error {
 	// Check current version
 	var version int
@@ -157,6 +170,11 @@ func (s *Syncer) migrate() error {
 	}
 	if version < 3 {
 		if _, err := s.db.Exec(migration3); err != nil {
+			return err
+		}
+	}
+	if version < 4 {
+		if _, err := s.db.Exec(migration4); err != nil {
 			return err
 		}
 	}

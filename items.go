@@ -16,6 +16,8 @@ type Item struct {
 	P      json.RawMessage `json:"p"`
 	Kind   ItemKind        `json:"e"`
 	Action ItemAction      `json:"t"`
+	// ServerIndex is the source history slot index for this item when fetched via History.Items.
+	ServerIndex *int `json:"-"`
 }
 
 type itemsResponse struct {
@@ -63,13 +65,7 @@ func (h *History) Items(opts ItemsOptions) ([]Item, bool, error) {
 	if err := json.Unmarshal(bs, &v); err != nil {
 		return nil, false, err
 	}
-	var items = []Item{}
-	for _, m := range v.Items {
-		for id, item := range m {
-			item.UUID = id
-			items = append(items, item)
-		}
-	}
+	items := flattenItems(v.Items, opts.StartIndex)
 	// LoadedServerIndex tracks the next unread server index.
 	// It must be relative to the requested start index, not cumulative from zero.
 	h.LoadedServerIndex = opts.StartIndex + len(v.Items)
@@ -78,4 +74,21 @@ func (h *History) Items(opts ItemsOptions) ([]Item, bool, error) {
 	h.LatestTotalContentSize = v.LatestTotalContentSize
 	hasMoreItems := h.LoadedServerIndex < h.LatestServerIndex
 	return items, hasMoreItems, nil
+}
+
+func flattenItems(entries []map[string]Item, startIndex int) []Item {
+	items := make([]Item, 0, len(entries))
+	for offset, m := range entries {
+		serverIndex := startIndex + offset
+		for id, item := range m {
+			item.UUID = id
+			item.ServerIndex = intPointer(serverIndex)
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func intPointer(v int) *int {
+	return &v
 }

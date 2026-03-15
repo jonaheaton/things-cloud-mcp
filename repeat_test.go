@@ -68,12 +68,111 @@ func TestRepeaterConfiguration_NewFields(t *testing.T) {
 }
 
 func TestRepeaterConfiguration_IsNeverending(t *testing.T) {
-	ts := &Timestamp{}
-	ts.UnmarshalJSON([]byte(`64092211200`))
-	rc := RepeaterConfiguration{LastScheduledAt: ts}
+	ts := Timestamp(time.Date(NeverendingRepeatYear, time.January, 1, 0, 0, 0, 0, time.UTC))
+	rc := RepeaterConfiguration{LastScheduledAt: &ts}
 
 	if !rc.IsNeverending() {
 		t.Fatal("Expect repeater to be never ending, but isn't")
+	}
+}
+
+func TestRepeaterConfiguration_InvalidConfigDoesNotPanic(t *testing.T) {
+	start := time.Date(2026, time.March, 15, 12, 0, 0, 0, time.UTC)
+	firstScheduledAt := Timestamp(start)
+	monday := time.Monday
+	day := int64(1)
+
+	assertNoPanicZeroTime := func(t *testing.T, fn func() time.Time) {
+		t.Helper()
+		defer func() {
+			if r := recover(); r != nil {
+				t.Fatalf("unexpected panic: %v", r)
+			}
+		}()
+
+		if got := fn(); !got.IsZero() {
+			t.Fatalf("expected zero time, got %v", got)
+		}
+	}
+
+	testCases := []struct {
+		name string
+		fn   func() time.Time
+	}{
+		{
+			name: "next daily without first scheduled at",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FrequencyUnit:      FrequencyUnitDaily,
+					FrequencyAmplitude: 1,
+				}.NextScheduledAt(0)
+			},
+		},
+		{
+			name: "next weekly with missing weekday",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FirstScheduledAt:    &firstScheduledAt,
+					FrequencyUnit:       FrequencyUnitWeekly,
+					FrequencyAmplitude:  1,
+					DetailConfiguration: []RepeaterDetailConfiguration{{}},
+				}.NextScheduledAt(0)
+			},
+		},
+		{
+			name: "compute first weekly with empty details",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FrequencyUnit: FrequencyUnitWeekly,
+				}.ComputeFirstScheduledAt(start)
+			},
+		},
+		{
+			name: "next monthly with missing month of",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FirstScheduledAt:    &firstScheduledAt,
+					FrequencyUnit:       FrequencyUnitMonthly,
+					FrequencyAmplitude:  1,
+					DetailConfiguration: []RepeaterDetailConfiguration{{Weekday: &monday}},
+				}.NextScheduledAt(0)
+			},
+		},
+		{
+			name: "compute first monthly with missing month of",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FrequencyUnit:       FrequencyUnitMonthly,
+					DetailConfiguration: []RepeaterDetailConfiguration{{Weekday: &monday}},
+				}.ComputeFirstScheduledAt(start)
+			},
+		},
+		{
+			name: "next yearly with missing month",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FirstScheduledAt:    &firstScheduledAt,
+					FrequencyUnit:       FrequencyUnitYearly,
+					FrequencyAmplitude:  1,
+					DetailConfiguration: []RepeaterDetailConfiguration{{Day: &day}},
+				}.NextScheduledAt(0)
+			},
+		},
+		{
+			name: "compute first yearly with missing month",
+			fn: func() time.Time {
+				return RepeaterConfiguration{
+					FrequencyUnit:       FrequencyUnitYearly,
+					DetailConfiguration: []RepeaterDetailConfiguration{{Day: &day}},
+				}.ComputeFirstScheduledAt(start)
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertNoPanicZeroTime(t, tc.fn)
+		})
 	}
 }
 

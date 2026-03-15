@@ -3,12 +3,18 @@ set -euo pipefail
 
 # REST API endpoint tests — verifies /api/* endpoints with auth.
 # Usage: ./test-api.sh [base_url] [api_key]
+# The base URL can also be set via BASE_URL env var.
 # The api_key can also be set via API_KEY env var.
 
-BASE="${1:-http://localhost:8080}"
+BASE="${1:-${BASE_URL:-}}"
 API_KEY="${2:-${API_KEY:-}}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="${SCRIPT_DIR}/test-results.log"
+
+if [ -z "$BASE" ]; then
+  echo "Error: base URL is required. Pass as the first arg or set BASE_URL env var."
+  exit 1
+fi
 
 if [ -z "$API_KEY" ]; then
   echo "Error: API_KEY is required. Pass as second arg or set API_KEY env var."

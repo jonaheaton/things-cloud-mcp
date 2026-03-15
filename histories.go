@@ -248,6 +248,22 @@ type commitResponse struct {
 	ServerHeadIndex int `json:"server-head-index"`
 }
 
+// HTTPStatusError captures an unexpected HTTP response status from the Things Cloud API.
+type HTTPStatusError struct {
+	StatusCode int
+	Status     string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Status != "" {
+		return fmt.Sprintf("http response code: %s", e.Status)
+	}
+	return fmt.Sprintf("http response code: %d", e.StatusCode)
+}
+
 // Identifiable abstracts different thingscloud write requests. As we need to provide a map
 // indexed by UUID, all we care about is the ID of the change, not the change itself
 type Identifiable interface {
@@ -286,8 +302,11 @@ func (h *History) Write(items ...Identifiable) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		bs, _ := httputil.DumpResponse(resp, true)
-		log.Println(string(bs))
-		return fmt.Errorf("Write failed: %d", resp.StatusCode)
+		log.Println(formatDebugLogBody(bs))
+		return &HTTPStatusError{
+			StatusCode: resp.StatusCode,
+			Status:     resp.Status,
+		}
 	}
 	rs, err := io.ReadAll(resp.Body)
 	if err != nil {

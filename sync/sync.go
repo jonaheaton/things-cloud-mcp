@@ -30,7 +30,20 @@ type Syncer struct {
 	db      dbExecutor // current executor (db or tx)
 	client  *things.Client
 	history *things.History
-	mu      gosync.Mutex
+	mu      gosync.RWMutex
+}
+
+func (s *Syncer) withDB(db dbExecutor) *Syncer {
+	return &Syncer{
+		rawDB:   s.rawDB,
+		db:      db,
+		client:  s.client,
+		history: s.history,
+	}
+}
+
+func (s *Syncer) readSyncer() *Syncer {
+	return s.withDB(s.rawDB)
 }
 
 // Open creates or opens a sync database and connects to Things Cloud
@@ -130,6 +143,9 @@ func (s *Syncer) Sync() ([]Change, error) {
 
 	// If our cursor is already at or beyond the server's index, nothing to fetch
 	if startIndex >= serverIndex {
+		if err := s.purgeDeleted(); err != nil {
+			return nil, err
+		}
 		return nil, nil
 	}
 
@@ -177,23 +193,31 @@ func (s *Syncer) Sync() ([]Change, error) {
 	if err := s.saveSyncState(s.history.ID, s.history.LatestServerIndex); err != nil {
 		return nil, err
 	}
+	if err := s.purgeDeleted(); err != nil {
+		return nil, err
+	}
 
 	return allChanges, nil
 }
 
 // LastSyncedIndex returns the server index we've synced up to
 func (s *Syncer) LastSyncedIndex() int {
-	_, idx, _ := s.getSyncState()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, idx, _ := s.readSyncer().getSyncState()
 	return idx
 }
 
 // ChangesSince returns changes that occurred after the given timestamp
 func (s *Syncer) ChangesSince(timestamp time.Time) ([]Change, error) {
-	rows, err := s.db.Query(`
-		SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
-		FROM change_log
-		WHERE synced_at > ?
-		ORDER BY id
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.rawDB.Query(`
+			SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
+			FROM change_log
+			WHERE synced_at > ?
+			ORDER BY id
 	`, timestamp.Unix())
 	if err != nil {
 		return nil, err
@@ -205,11 +229,14 @@ func (s *Syncer) ChangesSince(timestamp time.Time) ([]Change, error) {
 
 // ChangesSinceIndex returns changes that occurred after the given server index
 func (s *Syncer) ChangesSinceIndex(serverIndex int) ([]Change, error) {
-	rows, err := s.db.Query(`
-		SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
-		FROM change_log
-		WHERE server_index > ?
-		ORDER BY id
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.rawDB.Query(`
+			SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
+			FROM change_log
+			WHERE server_index > ?
+			ORDER BY id
 	`, serverIndex)
 	if err != nil {
 		return nil, err
@@ -221,11 +248,14 @@ func (s *Syncer) ChangesSinceIndex(serverIndex int) ([]Change, error) {
 
 // ChangesForEntity returns all changes for a specific entity
 func (s *Syncer) ChangesForEntity(entityUUID string) ([]Change, error) {
-	rows, err := s.db.Query(`
-		SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
-		FROM change_log
-		WHERE entity_uuid = ?
-		ORDER BY id
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.rawDB.Query(`
+			SELECT id, server_index, synced_at, change_type, entity_type, entity_uuid, payload
+			FROM change_log
+			WHERE entity_uuid = ?
+			ORDER BY id
 	`, entityUUID)
 	if err != nil {
 		return nil, err

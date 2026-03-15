@@ -1078,6 +1078,18 @@ func TestTaskLocation(t *testing.T) {
 		}
 	})
 
+	t.Run("anytime schedule uses UTC day boundaries", func(t *testing.T) {
+		t.Parallel()
+		nowUTC := time.Date(2026, time.March, 15, 0, 30, 0, 0, time.UTC)
+		sameUTCDayDifferentLocalDay := time.Date(2026, time.March, 14, 23, 45, 0, 0, time.FixedZone("UTC-1", -1*60*60))
+		task := &things.Task{Schedule: things.TaskScheduleAnytime, ScheduledDate: &sameUTCDayDifferentLocalDay}
+
+		loc := taskLocationAt(task, nowUTC)
+		if loc != LocationToday {
+			t.Errorf("expected LocationToday, got %v", loc)
+		}
+	})
+
 	t.Run("someday schedule without date", func(t *testing.T) {
 		t.Parallel()
 		task := &things.Task{Schedule: things.TaskScheduleSomeday}
@@ -1276,6 +1288,20 @@ func TestIsToday(t *testing.T) {
 		tomorrow := time.Now().AddDate(0, 0, 1)
 		if isToday(&tomorrow) {
 			t.Error("expected tomorrow to return false")
+		}
+	})
+
+	t.Run("uses UTC day boundaries", func(t *testing.T) {
+		t.Parallel()
+		nowUTC := time.Date(2026, time.March, 15, 0, 30, 0, 0, time.UTC)
+		sameUTCDayDifferentLocalDay := time.Date(2026, time.March, 14, 23, 45, 0, 0, time.FixedZone("UTC-1", -1*60*60))
+		differentUTCDaySameLocalDay := time.Date(2026, time.March, 15, 0, 15, 0, 0, time.FixedZone("UTC+2", 2*60*60))
+
+		if !isTodayAt(&sameUTCDayDifferentLocalDay, nowUTC) {
+			t.Error("expected same UTC day to return true even if local day differs")
+		}
+		if isTodayAt(&differentUTCDaySameLocalDay, nowUTC) {
+			t.Error("expected different UTC day to return false even if local day matches")
 		}
 	})
 }

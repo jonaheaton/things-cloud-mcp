@@ -1,5 +1,9 @@
 # MCP Today/Overdue Mismatch Incident (2026-03-04 to 2026-03-05)
 
+## Status
+
+Closed. The original March 5 fixes addressed cursoring, concurrent sync, and read-path error surfacing. A later follow-up on **2026-03-15** fixed stale `today_index_ref` carry-over on partial task updates and added a schema migration that forces a clean local resync for old corrupted caches. See [2026-03-15-stability-wrap-up.md](2026-03-15-stability-wrap-up.md).
+
 ## Summary
 
 During morning reviews on **2026-03-04** and **2026-03-05** (Europe/London), MCP task lists diverged from the Things app Today view in both directions:

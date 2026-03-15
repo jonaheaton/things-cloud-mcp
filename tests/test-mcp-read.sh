@@ -4,7 +4,11 @@ set -euo pipefail
 # MCP read tool tests — verifies all read-only tools return valid responses.
 # Usage: ./test-mcp-read.sh [base_url]
 
-BASE="${1:-http://localhost:8080}"
+BASE="${1:-${BASE_URL:-}}"
+if [ -z "${BASE}" ]; then
+  echo "Error: base URL is required. Pass as the first arg or set BASE_URL."
+  exit 1
+fi
 ENDPOINT="${BASE}/mcp"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_FILE="${SCRIPT_DIR}/test-results.log"

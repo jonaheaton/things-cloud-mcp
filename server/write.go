@@ -433,7 +433,7 @@ func buildRepeatRule(repeat string, refDate time.Time) (*json.RawMessage, error)
 
 	ref := time.Date(refDate.Year(), refDate.Month(), refDate.Day(), 0, 0, 0, 0, time.UTC)
 	srTs := ref.Unix()
-	edTs := int64(64092211200) // year 4001 = neverending
+	edTs := time.Date(thingscloud.NeverendingRepeatYear, time.January, 1, 0, 0, 0, 0, time.UTC).Unix()
 	if endTs != nil {
 		if *endTs < srTs {
 			return nil, fmt.Errorf("repeat end date must be on or after start date")
@@ -495,7 +495,7 @@ func historyWrite(env writeEnvelope) error {
 		return fmt.Errorf("history sync failed: %w", err)
 	}
 	err := history.Write(env)
-	if err != nil && strings.Contains(err.Error(), "409") {
+	if isConflictError(err) {
 		log.Printf("[WRITE] 409 conflict, retrying...")
 		if err2 := history.Sync(); err2 != nil {
 			return fmt.Errorf("history re-sync failed: %w", err2)
@@ -508,6 +508,11 @@ func historyWrite(env writeEnvelope) error {
 	}
 	log.Printf("[WRITE] OK — new server index: %d", history.LatestServerIndex)
 	return nil
+}
+
+func isConflictError(err error) bool {
+	var statusErr *thingscloud.HTTPStatusError
+	return errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusConflict
 }
 
 // parseWhen interprets the when parameter. Returns (st, sr, tir, handled).
@@ -1081,8 +1086,8 @@ func handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CreateTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON: "+err.Error(), 400)
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSONDecodeError(w, "invalid JSON: ", err)
 		return
 	}
 	if req.Title == "" {
@@ -1107,8 +1112,8 @@ func handleCompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req UUIDRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON: "+err.Error(), 400)
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSONDecodeError(w, "invalid JSON: ", err)
 		return
 	}
 	if req.UUID == "" {
@@ -1132,8 +1137,8 @@ func handleTrashTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req UUIDRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON: "+err.Error(), 400)
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSONDecodeError(w, "invalid JSON: ", err)
 		return
 	}
 	if req.UUID == "" {
@@ -1157,8 +1162,8 @@ func handleEditTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req EditTaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		jsonError(w, "invalid JSON: "+err.Error(), 400)
+	if err := decodeJSONBody(w, r, &req); err != nil {
+		writeJSONDecodeError(w, "invalid JSON: ", err)
 		return
 	}
 	if req.UUID == "" {

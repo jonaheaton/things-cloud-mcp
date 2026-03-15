@@ -81,3 +81,14 @@ func TestClient_UserAgent(t *testing.T) {
 		t.Error("things-client-info header is missing or empty")
 	}
 }
+
+func TestClient_DefaultTimeout(t *testing.T) {
+	c := New("https://example.com", "test@example.com", "password")
+
+	if c.client == nil {
+		t.Fatal("expected http client to be initialized")
+	}
+	if c.client.Timeout != defaultHTTPTimeout {
+		t.Fatalf("client timeout = %v, want %v", c.client.Timeout, defaultHTTPTimeout)
+	}
+}

@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	things "github.com/arthursoares/things-cloud-sdk"
 )
 
 func decodeRepeatConfig(t *testing.T, raw *json.RawMessage) map[string]any {
@@ -101,5 +103,19 @@ func TestBuildRepeatRule_EndDateBeforeStart(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "on or after start date") {
 		t.Fatalf("expected on-or-after-start-date error, got: %v", err)
+	}
+}
+
+func TestBuildRepeatRule_DefaultsToNeverendingSentinel(t *testing.T) {
+	ref := time.Date(2026, 2, 17, 0, 0, 0, 0, time.UTC)
+	raw, err := buildRepeatRule("daily", ref)
+	if err != nil {
+		t.Fatalf("buildRepeatRule returned error: %v", err)
+	}
+	cfg := decodeRepeatConfig(t, raw)
+
+	wantEnd := float64(time.Date(things.NeverendingRepeatYear, time.January, 1, 0, 0, 0, 0, time.UTC).Unix())
+	if got := numberField(t, cfg, "ed"); got != wantEnd {
+		t.Fatalf("expected ed=%.0f, got %.0f", wantEnd, got)
 	}
 }

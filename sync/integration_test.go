@@ -2,6 +2,7 @@ package sync
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -316,6 +317,256 @@ func TestTasksInTodayWithTIR(t *testing.T) {
 	}
 }
 
+func TestProcessItemsUsesSourceServerIndex(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	makeTaskItem := func(uuid, title string, serverIndex int) things.Item {
+		payload := things.TaskActionItemPayload{}
+		payload.Title = &title
+		tp := things.TaskTypeTask
+		payload.Type = &tp
+
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
+
+		return things.Item{
+			UUID:        uuid,
+			Kind:        things.ItemKindTask,
+			Action:      things.ItemActionCreated,
+			P:           payloadBytes,
+			ServerIndex: intPtr(serverIndex),
+		}
+	}
+
+	items := []things.Item{
+		makeTaskItem("task-shared-slot-1", "Shared slot 1", 100),
+		makeTaskItem("task-shared-slot-2", "Shared slot 2", 100),
+	}
+
+	changes, err := syncer.processItems(items, 100)
+	if err != nil {
+		t.Fatalf("processItems failed: %v", err)
+	}
+
+	if len(changes) != 2 {
+		t.Fatalf("expected 2 changes, got %d", len(changes))
+	}
+	for _, change := range changes {
+		if change.ServerIndex() != 100 {
+			t.Fatalf("change server index = %d, want 100", change.ServerIndex())
+		}
+	}
+
+	changesAfterSharedIndex, err := syncer.ChangesSinceIndex(100)
+	if err != nil {
+		t.Fatalf("ChangesSinceIndex(100) failed: %v", err)
+	}
+	if len(changesAfterSharedIndex) != 0 {
+		t.Fatalf("expected no changes after shared server index, got %d", len(changesAfterSharedIndex))
+	}
+
+	changesBeforeSharedIndex, err := syncer.ChangesSinceIndex(99)
+	if err != nil {
+		t.Fatalf("ChangesSinceIndex(99) failed: %v", err)
+	}
+	if len(changesBeforeSharedIndex) != 2 {
+		t.Fatalf("expected 2 changes after index 99, got %d", len(changesBeforeSharedIndex))
+	}
+	for _, change := range changesBeforeSharedIndex {
+		if change.ServerIndex() != 100 {
+			t.Fatalf("stored change server index = %d, want 100", change.ServerIndex())
+		}
+	}
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func TestIntegration_TaskAssignmentChanges(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	t.Run("assigning to project and area emits container changes", func(t *testing.T) {
+		project := &things.Task{UUID: "project-1", Title: "Project", Type: things.TaskTypeProject}
+		if err := syncer.saveTask(project); err != nil {
+			t.Fatalf("saveTask(project) failed: %v", err)
+		}
+		area := &things.Area{UUID: "area-1", Title: "Work"}
+		if err := syncer.saveArea(area); err != nil {
+			t.Fatalf("saveArea failed: %v", err)
+		}
+		task := &things.Task{UUID: "task-assign", Title: "Task", Type: things.TaskTypeTask}
+		if err := syncer.saveTask(task); err != nil {
+			t.Fatalf("saveTask(task) failed: %v", err)
+		}
+
+		parentIDs := []string{"project-1"}
+		areaIDs := []string{"area-1"}
+		payload := things.TaskActionItemPayload{
+			ParentTaskIDs: &parentIDs,
+			AreaIDs:       &areaIDs,
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		item := things.Item{
+			UUID:   "task-assign",
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      payloadBytes,
+		}
+
+		changes, err := syncer.processItems([]things.Item{item}, 20)
+		if err != nil {
+			t.Fatalf("processItems failed: %v", err)
+		}
+
+		var gotProject, gotArea bool
+		for _, change := range changes {
+			switch c := change.(type) {
+			case TaskAssignedToProject:
+				gotProject = true
+				if c.Project == nil || c.Project.UUID != "project-1" {
+					t.Fatalf("expected new project assignment to project-1, got %#v", c.Project)
+				}
+				if c.OldProject != nil {
+					t.Fatalf("expected no old project, got %#v", c.OldProject)
+				}
+			case TaskAssignedToArea:
+				gotArea = true
+				if c.Area == nil || c.Area.UUID != "area-1" {
+					t.Fatalf("expected new area assignment to area-1, got %#v", c.Area)
+				}
+				if c.OldArea != nil {
+					t.Fatalf("expected no old area, got %#v", c.OldArea)
+				}
+			}
+		}
+
+		if !gotProject {
+			t.Fatal("expected TaskAssignedToProject change")
+		}
+		if !gotArea {
+			t.Fatal("expected TaskAssignedToArea change")
+		}
+	})
+
+	t.Run("clearing project and area emits removal changes", func(t *testing.T) {
+		project := &things.Task{UUID: "project-2", Title: "Project 2", Type: things.TaskTypeProject}
+		if err := syncer.saveTask(project); err != nil {
+			t.Fatalf("saveTask(project) failed: %v", err)
+		}
+		area := &things.Area{UUID: "area-2", Title: "Personal"}
+		if err := syncer.saveArea(area); err != nil {
+			t.Fatalf("saveArea failed: %v", err)
+		}
+		task := &things.Task{
+			UUID:          "task-clear",
+			Title:         "Task Clear",
+			Type:          things.TaskTypeTask,
+			ParentTaskIDs: []string{"project-2"},
+			AreaIDs:       []string{"area-2"},
+		}
+		if err := syncer.saveTask(task); err != nil {
+			t.Fatalf("saveTask(task) failed: %v", err)
+		}
+
+		parentIDs := []string{}
+		areaIDs := []string{}
+		payload := things.TaskActionItemPayload{
+			ParentTaskIDs: &parentIDs,
+			AreaIDs:       &areaIDs,
+		}
+		payloadBytes, _ := json.Marshal(payload)
+		item := things.Item{
+			UUID:   "task-clear",
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      payloadBytes,
+		}
+
+		changes, err := syncer.processItems([]things.Item{item}, 21)
+		if err != nil {
+			t.Fatalf("processItems failed: %v", err)
+		}
+
+		var gotProject, gotArea bool
+		for _, change := range changes {
+			switch c := change.(type) {
+			case TaskAssignedToProject:
+				gotProject = true
+				if c.Project != nil {
+					t.Fatalf("expected project removal, got new project %#v", c.Project)
+				}
+				if c.OldProject == nil || c.OldProject.UUID != "project-2" {
+					t.Fatalf("expected old project project-2, got %#v", c.OldProject)
+				}
+			case TaskAssignedToArea:
+				gotArea = true
+				if c.Area != nil {
+					t.Fatalf("expected area removal, got new area %#v", c.Area)
+				}
+				if c.OldArea == nil || c.OldArea.UUID != "area-2" {
+					t.Fatalf("expected old area area-2, got %#v", c.OldArea)
+				}
+			}
+		}
+
+		if !gotProject {
+			t.Fatal("expected TaskAssignedToProject change")
+		}
+		if !gotArea {
+			t.Fatal("expected TaskAssignedToArea change")
+		}
+	})
+
+	t.Run("assigning to parent task does not emit project assignment", func(t *testing.T) {
+		parent := &things.Task{UUID: "parent-task", Title: "Parent", Type: things.TaskTypeTask}
+		if err := syncer.saveTask(parent); err != nil {
+			t.Fatalf("saveTask(parent) failed: %v", err)
+		}
+		child := &things.Task{UUID: "child-task", Title: "Child", Type: things.TaskTypeTask}
+		if err := syncer.saveTask(child); err != nil {
+			t.Fatalf("saveTask(child) failed: %v", err)
+		}
+
+		parentIDs := []string{"parent-task"}
+		payload := things.TaskActionItemPayload{ParentTaskIDs: &parentIDs}
+		payloadBytes, _ := json.Marshal(payload)
+		item := things.Item{
+			UUID:   "child-task",
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      payloadBytes,
+		}
+
+		changes, err := syncer.processItems([]things.Item{item}, 22)
+		if err != nil {
+			t.Fatalf("processItems failed: %v", err)
+		}
+
+		for _, change := range changes {
+			if _, ok := change.(TaskAssignedToProject); ok {
+				t.Fatalf("did not expect TaskAssignedToProject for subtask assignment: %#v", change)
+			}
+		}
+	})
+}
+
 func TestStateQueries(t *testing.T) {
 	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "test.db")
@@ -433,6 +684,71 @@ func TestStateQueries(t *testing.T) {
 	})
 }
 
+func TestStateQueryPagination(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	for i := 1; i <= 3; i++ {
+		if err := syncer.saveTask(&things.Task{
+			UUID:     fmt.Sprintf("task-%d", i),
+			Title:    fmt.Sprintf("Task %d", i),
+			Type:     things.TaskTypeTask,
+			Status:   things.TaskStatusPending,
+			Schedule: things.TaskScheduleAnytime,
+			Index:    i,
+		}); err != nil {
+			t.Fatalf("saveTask %d failed: %v", i, err)
+		}
+	}
+	if _, err := syncer.db.Exec(`INSERT INTO areas (uuid, title, "index") VALUES ('area-1', 'Area 1', 1), ('area-2', 'Area 2', 2), ('area-3', 'Area 3', 3)`); err != nil {
+		t.Fatalf("insert areas failed: %v", err)
+	}
+	if _, err := syncer.db.Exec(`INSERT INTO tags (uuid, title, shortcut, "index") VALUES ('tag-1', 'Tag 1', '', 1), ('tag-2', 'Tag 2', '', 2), ('tag-3', 'Tag 3', '', 3)`); err != nil {
+		t.Fatalf("insert tags failed: %v", err)
+	}
+
+	state := syncer.State()
+
+	t.Run("AllTasks paginates with limit and offset", func(t *testing.T) {
+		tasks, err := state.AllTasks(QueryOpts{Limit: 2, Offset: 1})
+		if err != nil {
+			t.Fatalf("AllTasks failed: %v", err)
+		}
+		if len(tasks) != 2 {
+			t.Fatalf("expected 2 tasks, got %d", len(tasks))
+		}
+		if tasks[0].UUID != "task-2" || tasks[1].UUID != "task-3" {
+			t.Fatalf("unexpected tasks: %s, %s", tasks[0].UUID, tasks[1].UUID)
+		}
+	})
+
+	t.Run("AllAreas paginates with limit and offset", func(t *testing.T) {
+		areas, err := state.AllAreasWithOpts(QueryOpts{Limit: 1, Offset: 1})
+		if err != nil {
+			t.Fatalf("AllAreasWithOpts failed: %v", err)
+		}
+		if len(areas) != 1 || areas[0].UUID != "area-2" {
+			t.Fatalf("unexpected areas: %#v", areas)
+		}
+	})
+
+	t.Run("AllTags paginates with offset only", func(t *testing.T) {
+		tags, err := state.AllTagsWithOpts(QueryOpts{Offset: 2})
+		if err != nil {
+			t.Fatalf("AllTagsWithOpts failed: %v", err)
+		}
+		if len(tags) != 1 || tags[0].UUID != "tag-3" {
+			t.Fatalf("unexpected tags: %#v", tags)
+		}
+	})
+}
+
 func TestProcessTaskClearsNullableDates(t *testing.T) {
 	t.Parallel()
 
@@ -492,4 +808,120 @@ func TestProcessTaskClearsNullableDates(t *testing.T) {
 	if task.CompletionDate != nil {
 		t.Error("expected CompletionDate to be cleared")
 	}
+}
+
+func TestProcessTaskClearsStaleTodayIndexReference(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	today := now
+	future := now.Add(48 * time.Hour)
+
+	t.Run("scheduled date update without tir clears stale today reference", func(t *testing.T) {
+		taskUUID := "task-clear-stale-tir-sr"
+		if err := syncer.saveTask(&things.Task{
+			UUID:                taskUUID,
+			Title:               "Task",
+			Schedule:            things.TaskScheduleAnytime,
+			Type:                things.TaskTypeTask,
+			Status:              things.TaskStatusPending,
+			CreationDate:        now,
+			TodayIndexReference: &today,
+		}); err != nil {
+			t.Fatalf("saveTask failed: %v", err)
+		}
+
+		futureTS := things.Timestamp(future)
+		payload := things.TaskActionItemPayload{ScheduledDate: &futureTS}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		item := things.Item{
+			UUID:   taskUUID,
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      payloadBytes,
+		}
+
+		if _, err := syncer.processItems([]things.Item{item}, 1); err != nil {
+			t.Fatalf("processItems failed: %v", err)
+		}
+
+		task, err := syncer.State().Task(taskUUID)
+		if err != nil {
+			t.Fatalf("Task lookup failed: %v", err)
+		}
+		if task == nil {
+			t.Fatal("task not found")
+		}
+		if task.TodayIndexReference != nil {
+			t.Fatal("expected TodayIndexReference to be cleared")
+		}
+
+		todayTasks, err := syncer.State().TasksInToday(QueryOpts{})
+		if err != nil {
+			t.Fatalf("TasksInToday failed: %v", err)
+		}
+		for _, todayTask := range todayTasks {
+			if todayTask.UUID == taskUUID {
+				t.Fatal("task should not remain in Today after sr-only reschedule")
+			}
+		}
+	})
+
+	t.Run("schedule update without tir clears stale today reference", func(t *testing.T) {
+		taskUUID := "task-clear-stale-tir-schedule"
+		if err := syncer.saveTask(&things.Task{
+			UUID:                taskUUID,
+			Title:               "Task",
+			Schedule:            things.TaskScheduleSomeday,
+			Type:                things.TaskTypeTask,
+			Status:              things.TaskStatusPending,
+			CreationDate:        now,
+			TodayIndexReference: &today,
+		}); err != nil {
+			t.Fatalf("saveTask failed: %v", err)
+		}
+
+		schedule := things.TaskScheduleAnytime
+		payload := things.TaskActionItemPayload{Schedule: &schedule}
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatalf("Marshal failed: %v", err)
+		}
+
+		item := things.Item{
+			UUID:   taskUUID,
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      payloadBytes,
+		}
+
+		if _, err := syncer.processItems([]things.Item{item}, 2); err != nil {
+			t.Fatalf("processItems failed: %v", err)
+		}
+
+		task, err := syncer.State().Task(taskUUID)
+		if err != nil {
+			t.Fatalf("Task lookup failed: %v", err)
+		}
+		if task == nil {
+			t.Fatal("task not found")
+		}
+		if task.TodayIndexReference != nil {
+			t.Fatal("expected TodayIndexReference to be cleared")
+		}
+		if got := taskLocation(task); got != LocationAnytime {
+			t.Fatalf("expected task location %v, got %v", LocationAnytime, got)
+		}
+	})
 }

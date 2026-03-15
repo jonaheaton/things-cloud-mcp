@@ -12,6 +12,7 @@ The server syncs your Things Cloud data into a local SQLite database and exposes
 - **REST API** (`/api/*`) — Bearer token auth, for scripts and apps
 
 Changes you make in the Things app show up immediately. Tasks Claude creates appear in Things within seconds. No restart required.
+The server performs an initial sync at startup and now exits if it cannot establish a clean local snapshot.
 
 ```
 ┌──────────────┐     ┌──────────────────┐     ┌──────────────┐
@@ -47,14 +48,14 @@ Once connected, Claude can do pretty much everything you'd do in the Things app:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `things_list_today` | Tasks scheduled for today | — |
-| `things_list_inbox` | Tasks in the inbox | — |
-| `things_list_all_tasks` | All open tasks | — |
-| `things_list_projects` | All projects | — |
-| `things_list_areas` | All areas | — |
-| `things_list_tags` | All tags | — |
-| `things_list_project_tasks` | Tasks in a project | `project_uuid` |
-| `things_list_area_tasks` | Tasks in an area | `area_uuid` |
+| `things_list_today` | Tasks scheduled for today | `limit`, `offset` |
+| `things_list_inbox` | Tasks in the inbox | `limit`, `offset` |
+| `things_list_all_tasks` | All open tasks | `limit`, `offset` |
+| `things_list_projects` | All projects | `limit`, `offset` |
+| `things_list_areas` | All areas | `limit`, `offset` |
+| `things_list_tags` | All tags | `limit`, `offset` |
+| `things_list_project_tasks` | Tasks in a project | `project_uuid`, `limit`, `offset` |
+| `things_list_area_tasks` | Tasks in an area | `area_uuid`, `limit`, `offset` |
 | `things_list_completed` | Recently completed tasks | `limit`, `completed_after`, `completed_before` |
 | `things_list_checklist_items` | Checklist items for a task | `task_uuid` |
 | `things_get_task` | Get a single task | `uuid` |
@@ -136,6 +137,14 @@ Once connected, Claude can do pretty much everything you'd do in the Things app:
 
 </details>
 
+## Operational Notes
+
+- **Startup is fail-fast.** The server now requires the initial sync to succeed before it starts serving REST or MCP traffic.
+- **Shutdown is graceful.** `SIGINT` and `SIGTERM` trigger an HTTP shutdown with a timeout instead of dropping in-flight requests immediately.
+- **Read surfaces support pagination.** REST list endpoints and the corresponding MCP list tools accept optional `limit` and `offset` values.
+- **Old `tir`/`sr` cache corruption is repaired automatically.** Opening a pre-fix sync database triggers a one-time local cache reset and full resync from Things Cloud history.
+- **Soft-deleted rows are purged from the local cache after sync.** This keeps the SQLite mirror from growing forever while preserving normal sync semantics.
+
 ## Getting started
 
 See **[docs/installation.md](docs/installation.md)** for full setup instructions. The short version:
@@ -168,11 +177,11 @@ All `/api/*` endpoints require `Authorization: Bearer <API_KEY>` when `API_KEY` 
 | `GET /` | Health check |
 | `GET /api/verify` | Verify Things Cloud credentials |
 | `GET /api/sync` | Trigger sync, returns change count |
-| `GET /api/tasks/today` | Tasks scheduled for today |
-| `GET /api/tasks/inbox` | Tasks in the inbox |
-| `GET /api/projects` | All projects |
-| `GET /api/areas` | All areas |
-| `GET /api/tags` | All tags |
+| `GET /api/tasks/today` | Tasks scheduled for today. Optional query params: `limit`, `offset` |
+| `GET /api/tasks/inbox` | Tasks in the inbox. Optional query params: `limit`, `offset` |
+| `GET /api/projects` | All projects. Optional query params: `limit`, `offset` |
+| `GET /api/areas` | All areas. Optional query params: `limit`, `offset` |
+| `GET /api/tags` | All tags. Optional query params: `limit`, `offset` |
 | `POST /api/tasks/create` | Create a task |
 | `POST /api/tasks/edit` | Edit a task |
 | `POST /api/tasks/complete` | Complete a task |
@@ -190,11 +199,11 @@ The underlying Go SDK can be used directly as a library. See **[docs/sdk.md](doc
 
 ## Testing
 
-112 integration tests across 5 test suites:
+113 integration tests across 5 test suites:
 
 ```bash
 ./tests/test-smoke.sh          # Core read/write workflow (11 checks)
-./tests/test-mcp.sh 010        # All MCP write tools (43 checks)
+./tests/test-mcp.sh 010        # All MCP write tools (44 checks)
 ./tests/test-mcp-read.sh       # All MCP read tools (29 checks)
 ./tests/test-mcp-protocol.sh   # JSON-RPC handshake and error handling (11 checks)
 API_KEY=your-key ./tests/test-api.sh  # All REST endpoints (18 checks)

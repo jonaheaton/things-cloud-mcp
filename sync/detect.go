@@ -132,15 +132,18 @@ func detectTaskChanges(old, new *things.Task, serverIndex int, ts time.Time) []C
 
 // taskLocation determines where a task lives based on schedule and dates
 func taskLocation(t *things.Task) TaskLocation {
+	return taskLocationAt(t, time.Now().UTC())
+}
+
+func taskLocationAt(t *things.Task, now time.Time) TaskLocation {
 	if t == nil {
 		return LocationUnknown
 	}
-	now := time.Now()
 	switch t.Schedule {
 	case things.TaskScheduleInbox:
 		return LocationInbox
 	case things.TaskScheduleAnytime:
-		if isToday(t.ScheduledDate) || isToday(t.TodayIndexReference) {
+		if isTodayAt(t.ScheduledDate, now) || isTodayAt(t.TodayIndexReference, now) {
 			return LocationToday
 		}
 		return LocationAnytime
@@ -154,11 +157,16 @@ func taskLocation(t *things.Task) TaskLocation {
 }
 
 func isToday(t *time.Time) bool {
+	return isTodayAt(t, time.Now().UTC())
+}
+
+func isTodayAt(t *time.Time, now time.Time) bool {
 	if t == nil {
 		return false
 	}
-	now := time.Now()
-	return t.Year() == now.Year() && t.YearDay() == now.YearDay()
+	nowUTC := now.UTC()
+	targetUTC := t.UTC()
+	return targetUTC.Year() == nowUTC.Year() && targetUTC.YearDay() == nowUTC.YearDay()
 }
 
 func isFutureAt(t *time.Time, now time.Time) bool {

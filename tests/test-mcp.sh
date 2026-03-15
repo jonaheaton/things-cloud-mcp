@@ -3,10 +3,14 @@ set -euo pipefail
 
 # MCP integration test — exercises all write tools with a named test cycle.
 # Usage: ./test-mcp.sh [cycle_name] [base_url]
-# Example: ./test-mcp.sh 001 http://localhost:8080
+# Example: BASE_URL=https://your-app-name.fly.dev ./test-mcp.sh 001
 
 CYCLE="${1:-001}"
-BASE="${2:-http://localhost:8080}"
+BASE="${2:-${BASE_URL:-}}"
+if [ -z "${BASE}" ]; then
+  echo "Error: base URL is required. Pass as the second arg or set BASE_URL."
+  exit 1
+fi
 PREFIX="[test-${CYCLE}]"
 ENDPOINT="${BASE}/mcp"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

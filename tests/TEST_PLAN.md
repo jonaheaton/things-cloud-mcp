@@ -2,17 +2,17 @@
 
 ## Overview
 
-All tests live in the `tests/` directory and run against the live deployed service at `http://localhost:8080`. All tests use real Things Cloud sync — there are no mocks. A 1-second delay between calls avoids Things Cloud 429 rate limiting.
+All tests live in the `tests/` directory and run against a deployed server URL that you provide via a script argument or `BASE_URL`. All tests use real Things Cloud sync — there are no mocks. A 1-second delay between calls avoids Things Cloud 429 rate limiting.
 
 ## Test Scripts
 
 | Script | Scope | Usage |
 |--------|-------|-------|
-| `test-smoke.sh` | Daily smoke test — core workflow | `./test-smoke.sh [base_url]` |
-| `test-mcp.sh` | MCP write tools + read verification | `./test-mcp.sh [cycle] [base_url]` |
-| `test-mcp-read.sh` | MCP read-only tools | `./test-mcp-read.sh [base_url]` |
-| `test-mcp-protocol.sh` | MCP JSON-RPC protocol | `./test-mcp-protocol.sh [base_url]` |
-| `test-api.sh` | REST API endpoints | `./test-api.sh [base_url] [api_key]` |
+| `test-smoke.sh` | Daily smoke test — core workflow | `BASE_URL=https://your-app-name.fly.dev ./test-smoke.sh` |
+| `test-mcp.sh` | MCP write tools + read verification | `BASE_URL=https://your-app-name.fly.dev ./test-mcp.sh [cycle]` |
+| `test-mcp-read.sh` | MCP read-only tools | `BASE_URL=https://your-app-name.fly.dev ./test-mcp-read.sh` |
+| `test-mcp-protocol.sh` | MCP JSON-RPC protocol | `BASE_URL=https://your-app-name.fly.dev ./test-mcp-protocol.sh` |
+| `test-api.sh` | REST API endpoints | `BASE_URL=https://your-app-name.fly.dev API_KEY=... ./test-api.sh` |
 
 Each script exits with code 0 on success, 1 on any failure.
 
