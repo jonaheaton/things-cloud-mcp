@@ -274,6 +274,14 @@ func TestTasksInTodayWithTIR(t *testing.T) {
 		ScheduledDate:       &yesterday,
 		TodayIndexReference: &yesterday,
 	})
+	threeDaysAgo := today.Add(-3 * 24 * time.Hour)
+	syncer.saveTask(&things.Task{
+		UUID:          "sr-only-overdue",
+		Title:         "SR Only Overdue",
+		Status:        things.TaskStatusPending,
+		Schedule:      things.TaskScheduleAnytime,
+		ScheduledDate: &threeDaysAgo,
+	})
 	syncer.saveTask(&things.Task{
 		UUID:     "no-dates",
 		Title:    "No Dates",
@@ -298,14 +306,14 @@ func TestTasksInTodayWithTIR(t *testing.T) {
 		got[task.UUID] = true
 	}
 
-	expected := []string{"sr-only", "tir-only", "both-today", "sr-old-tir-today", "sr-today-tir-old"}
+	expected := []string{"sr-only", "tir-only", "both-today", "sr-old-tir-today", "sr-today-tir-old", "both-old", "sr-only-overdue"}
 	for _, uuid := range expected {
 		if !got[uuid] {
 			t.Errorf("expected task %q in Today, but not found", uuid)
 		}
 	}
 
-	notExpected := []string{"both-old", "no-dates", "inbox-with-tir"}
+	notExpected := []string{"no-dates", "inbox-with-tir"}
 	for _, uuid := range notExpected {
 		if got[uuid] {
 			t.Errorf("task %q should NOT be in Today", uuid)
@@ -314,6 +322,158 @@ func TestTasksInTodayWithTIR(t *testing.T) {
 
 	if len(tasks) != len(expected) {
 		t.Errorf("expected %d tasks in Today, got %d", len(expected), len(tasks))
+	}
+}
+
+func TestTasksInTodayIncludesOverdue(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	nowUTC := time.Now().UTC()
+	today := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), 12, 0, 0, 0, time.UTC)
+	yesterday := today.Add(-24 * time.Hour)
+	sevenDaysAgo := today.Add(-7 * 24 * time.Hour)
+	thirtyDaysAgo := today.Add(-30 * 24 * time.Hour)
+	threeDaysAgo := today.Add(-3 * 24 * time.Hour)
+
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-1d", Title: "Overdue 1 day",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &yesterday,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-7d", Title: "Overdue 7 days",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &sevenDaysAgo,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-30d", Title: "Overdue 30 days",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &thirtyDaysAgo,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-tir", Title: "Overdue via TIR",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		TodayIndexReference: &threeDaysAgo,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-completed", Title: "Overdue but completed",
+		Status: things.TaskStatusCompleted, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &yesterday,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-inbox", Title: "Overdue but inbox",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleInbox,
+		ScheduledDate: &yesterday,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-someday", Title: "Overdue but someday",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleSomeday,
+		ScheduledDate: &yesterday,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "today-exact", Title: "Today exact",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &today,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "anytime-no-date", Title: "Anytime no date",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+	})
+
+	tasks, err := syncer.State().TasksInToday(QueryOpts{})
+	if err != nil {
+		t.Fatalf("TasksInToday failed: %v", err)
+	}
+
+	got := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		got[task.UUID] = true
+	}
+
+	expected := []string{"overdue-1d", "overdue-7d", "overdue-30d", "overdue-tir", "today-exact"}
+	for _, uuid := range expected {
+		if !got[uuid] {
+			t.Errorf("expected task %q in Today, but not found", uuid)
+		}
+	}
+
+	notExpected := []string{"overdue-completed", "overdue-inbox", "overdue-someday", "anytime-no-date"}
+	for _, uuid := range notExpected {
+		if got[uuid] {
+			t.Errorf("task %q should NOT be in Today", uuid)
+		}
+	}
+
+	if len(tasks) != len(expected) {
+		t.Errorf("expected %d tasks in Today, got %d", len(expected), len(tasks))
+	}
+}
+
+func TestTasksInAnytimeExcludesOverdue(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+
+	syncer, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer syncer.Close()
+
+	nowUTC := time.Now().UTC()
+	today := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day(), 12, 0, 0, 0, time.UTC)
+	yesterday := today.Add(-24 * time.Hour)
+	threeDaysAgo := today.Add(-3 * 24 * time.Hour)
+
+	syncer.saveTask(&things.Task{
+		UUID: "anytime-clean", Title: "Anytime clean",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-sr", Title: "Overdue SR",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &yesterday,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "overdue-tir", Title: "Overdue TIR",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		TodayIndexReference: &threeDaysAgo,
+	})
+	syncer.saveTask(&things.Task{
+		UUID: "today-sr", Title: "Today SR",
+		Status: things.TaskStatusPending, Schedule: things.TaskScheduleAnytime,
+		ScheduledDate: &today,
+	})
+
+	tasks, err := syncer.State().TasksInAnytime(QueryOpts{})
+	if err != nil {
+		t.Fatalf("TasksInAnytime failed: %v", err)
+	}
+
+	got := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		got[task.UUID] = true
+	}
+
+	if !got["anytime-clean"] {
+		t.Error("expected anytime-clean in Anytime, but not found")
+	}
+
+	shouldNotBeInAnytime := []string{"overdue-sr", "overdue-tir", "today-sr"}
+	for _, uuid := range shouldNotBeInAnytime {
+		if got[uuid] {
+			t.Errorf("task %q should NOT be in Anytime (should be in Today)", uuid)
+		}
+	}
+
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task in Anytime, got %d", len(tasks))
 	}
 }
 

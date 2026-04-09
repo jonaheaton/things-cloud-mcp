@@ -159,16 +159,16 @@ func (st *State) TasksInInbox(opts QueryOpts) ([]*things.Task, error) {
 
 // TasksInToday returns tasks in the Today view. A task appears in Today when
 // schedule=1 (started/anytime) AND either sr (scheduled_date) or tir
-// (today_index_ref) falls on today's date.
+// (today_index_ref) is set to today's date or any past date (overdue).
 func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
-	todayUnix, tomorrowUnix := currentUTCDayBounds()
+	_, tomorrowUnix := currentUTCDayBounds()
 
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND schedule = 1
 		AND (
-			(scheduled_date >= ? AND scheduled_date < ?)
-			OR (today_index_ref >= ? AND today_index_ref < ?)
+			(scheduled_date IS NOT NULL AND scheduled_date < ?)
+			OR (today_index_ref IS NOT NULL AND today_index_ref < ?)
 		) AND deleted = 0`
-	args := []any{todayUnix, tomorrowUnix, todayUnix, tomorrowUnix}
+	args := []any{tomorrowUnix, tomorrowUnix}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
@@ -190,16 +190,16 @@ func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
 }
 
 // TasksInAnytime returns tasks in the Anytime view. A task appears in Anytime
-// when schedule=1 and it is not classified into Today for the current UTC day.
+// when schedule=1 and it is not classified into Today (no date, or date is in the future).
 func (st *State) TasksInAnytime(opts QueryOpts) ([]*things.Task, error) {
-	todayUnix, tomorrowUnix := currentUTCDayBounds()
+	_, tomorrowUnix := currentUTCDayBounds()
 
 	query := `SELECT uuid FROM tasks WHERE type = 0 AND schedule = 1
 		AND NOT (
-			(scheduled_date IS NOT NULL AND scheduled_date >= ? AND scheduled_date < ?)
-			OR (today_index_ref IS NOT NULL AND today_index_ref >= ? AND today_index_ref < ?)
+			(scheduled_date IS NOT NULL AND scheduled_date < ?)
+			OR (today_index_ref IS NOT NULL AND today_index_ref < ?)
 		) AND deleted = 0`
-	args := []any{todayUnix, tomorrowUnix, todayUnix, tomorrowUnix}
+	args := []any{tomorrowUnix, tomorrowUnix}
 	if !opts.IncludeCompleted {
 		query += " AND status != 3"
 	}
