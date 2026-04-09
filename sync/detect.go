@@ -93,8 +93,8 @@ func detectTaskChanges(old, new *things.Task, serverIndex int, ts time.Time) []C
 
 	// Schedule/location changed (only for regular tasks)
 	if new.Type == things.TaskTypeTask {
-		oldLoc := taskLocation(old)
-		newLoc := taskLocation(new)
+		oldLoc := taskLocationAt(old, ts)
+		newLoc := taskLocationAt(new, ts)
 		if oldLoc != newLoc {
 			tc := taskChange{baseChange: base, Task: new}
 			switch newLoc {

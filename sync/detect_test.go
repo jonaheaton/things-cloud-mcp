@@ -286,7 +286,7 @@ func TestDetectTaskChanges(t *testing.T) {
 
 	t.Run("task moved to today", func(t *testing.T) {
 		t.Parallel()
-		today := time.Now()
+		today := now
 		old := &things.Task{UUID: "t1", Title: "Task", Schedule: things.TaskScheduleInbox}
 		new := &things.Task{UUID: "t1", Title: "Task", Schedule: things.TaskScheduleAnytime, ScheduledDate: &today}
 		changes := detectTaskChanges(old, new, 1, now)
@@ -305,7 +305,7 @@ func TestDetectTaskChanges(t *testing.T) {
 
 	t.Run("task moved to today via tir", func(t *testing.T) {
 		t.Parallel()
-		today := time.Now()
+		today := now
 		old := &things.Task{UUID: "t1", Title: "Task", Schedule: things.TaskScheduleInbox}
 		new := &things.Task{UUID: "t1", Title: "Task", Schedule: things.TaskScheduleAnytime, TodayIndexReference: &today}
 		changes := detectTaskChanges(old, new, 1, now)
@@ -361,6 +361,31 @@ func TestDetectTaskChanges(t *testing.T) {
 		}
 		if !found {
 			t.Error("expected TaskMovedToAnytime change")
+		}
+	})
+
+	t.Run("task movement uses provided timestamp instead of wall clock", func(t *testing.T) {
+		t.Parallel()
+		reference := time.Date(2026, time.April, 8, 12, 0, 0, 0, time.UTC)
+		old := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleInbox}
+		new := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleAnytime, ScheduledDate: &reference}
+		changes := detectTaskChanges(old, new, 1, reference)
+
+		found := false
+		for _, c := range changes {
+			if _, ok := c.(TaskMovedToToday); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("expected TaskMovedToToday when classification is evaluated at the provided timestamp")
+		}
+
+		for _, c := range changes {
+			if _, ok := c.(TaskMovedToAnytime); ok {
+				t.Error("movement classification should not use ambient wall clock")
+			}
 		}
 	})
 
@@ -1166,7 +1191,7 @@ func TestDetectOverdueTransition(t *testing.T) {
 
 	t.Run("task with past date detected as today", func(t *testing.T) {
 		t.Parallel()
-		yesterday := time.Now().AddDate(0, 0, -1)
+		yesterday := now.AddDate(0, 0, -1)
 		old := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleInbox}
 		new := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleAnytime, ScheduledDate: &yesterday}
 		changes := detectTaskChanges(old, new, 1, now)
@@ -1191,7 +1216,7 @@ func TestDetectOverdueTransition(t *testing.T) {
 
 	t.Run("task with past tir detected as today", func(t *testing.T) {
 		t.Parallel()
-		threeDaysAgo := time.Now().AddDate(0, 0, -3)
+		threeDaysAgo := now.AddDate(0, 0, -3)
 		old := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleInbox}
 		new := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleAnytime, TodayIndexReference: &threeDaysAgo}
 		changes := detectTaskChanges(old, new, 1, now)
