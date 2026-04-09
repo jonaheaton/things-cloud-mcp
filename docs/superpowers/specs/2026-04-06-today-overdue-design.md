@@ -1,5 +1,18 @@
 # Today View: Include Overdue Tasks
 
+## Implementation Status
+
+Implemented on April 8-9, 2026.
+
+- Piece A shipped in commit `4fe1387` (`TasksInToday` / `TasksInAnytime` query fix + integration tests)
+- Piece B shipped in commit `6c880a4` (change detection classification fix + detect tests)
+- Follow-up test stabilization shipped in commit `88d4a9c` (`TestIntegration/query_change_log` made self-contained)
+
+Verified locally against the dummy account on April 9, 2026:
+
+- `things_list_today` returned the naturally overdue dummy task `"Today is here! but soon overdue"` with `scheduled_for = 2026-04-08`
+- `things_list_anytime` did not include that task
+
 ## Context
 
 The `things_list_today` MCP tool only returns tasks scheduled for today's exact date. In the real Things 3 app, the Today view also shows overdue tasks — tasks scheduled for a past date that were never completed. This mismatch means the MCP tool under-reports what's actually in a user's Today view.
@@ -294,7 +307,6 @@ A dummy Things 3 account exists for local testing. Credentials are in `.env.test
 **Important caveats discovered during testing:**
 
 - **`parseWhen()` normalizes past dates to today** (`server/write.go` line 521): You cannot create an overdue task via the API — `things_create_task` with `when: "yesterday"` will schedule the task for today. Overdue tasks only exist when a previously-scheduled task's date passes without completion.
-- **Pre-existing test failure**: `TestIntegration/query_change_log` fails (`expected 4 changes after index 0, got 0`). This is unrelated to the today/overdue fix and exists on main before any changes.
 - **Go path on macOS**: May need `export PATH="/opt/homebrew/bin:$PATH"` if Homebrew Go isn't in the default path.
 
 **Start the local server:**
@@ -305,7 +317,7 @@ export $(grep -v '^#' .env.test | xargs)
 go run ./server/
 ```
 
-**Verify the fix (before/after):**
+**Verify the fix:**
 
 1. Call `things_list_today` — check for any naturally overdue tasks (tasks scheduled before today that were never completed)
 2. Call `things_list_anytime` — overdue tasks should NOT appear here after the fix
@@ -313,7 +325,7 @@ go run ./server/
 
 **To create a testable overdue task:**
 
-Since the API normalizes past dates, create a task scheduled for today, then wait 24+ hours before testing. Or use an account that already has overdue tasks (the dummy account has task "Today is here!" scheduled for 2026-04-08, which will be overdue after that date).
+Since the API normalizes past dates, create a task scheduled for today, then wait 24+ hours before testing. Or use an account that already has overdue tasks. The dummy account now has a naturally overdue task, `"Today is here! but soon overdue"`, scheduled for `2026-04-08`.
 
 ## Out of Scope
 

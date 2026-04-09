@@ -12,7 +12,13 @@
 
 **Prerequisites:** All commands assume Go is on PATH. If using Homebrew Go on macOS, run `export PATH="/opt/homebrew/bin:$PATH"` once at the start of the session.
 
-**Known pre-existing failure:** `TestIntegration/query_change_log` fails before any changes (`expected 4 changes after index 0, got 0`). This is unrelated to the today/overdue fix. Any `go test` run that includes it will exit code 1. Verify it is the ONLY failing test when checking for regressions.
+**Status:** Completed on April 8-9, 2026.
+
+- Piece A committed as `4fe1387`
+- Piece B committed as `6c880a4`
+- Follow-up test stabilization committed as `88d4a9c`
+- `go test -v ./sync/...` now passes
+- Live dummy-account verification confirmed a naturally overdue task appears in Today and not in Anytime
 
 ---
 
@@ -23,7 +29,7 @@
 
 These tests exercise the SQL query layer. They will fail against the current code because overdue tasks (past dates) are excluded from Today.
 
-- [ ] **Step 1: Update `TestTasksInTodayWithTIR` expectations**
+- [x] **Step 1: Update `TestTasksInTodayWithTIR` expectations**
 
 In `TestTasksInTodayWithTIR`, the task `"both-old"` has `sr=yesterday, tir=yesterday`. After our fix, this is overdue and belongs in Today. Also add a new overdue-only test task.
 
@@ -58,7 +64,7 @@ With:
 	notExpected := []string{"no-dates", "inbox-with-tir"}
 ```
 
-- [ ] **Step 2: Add `TestTasksInTodayIncludesOverdue` test**
+- [x] **Step 2: Add `TestTasksInTodayIncludesOverdue` test**
 
 Add this test after `TestTasksInTodayWithTIR`:
 
@@ -155,7 +161,7 @@ func TestTasksInTodayIncludesOverdue(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Add `TestTasksInAnytimeExcludesOverdue` test**
+- [x] **Step 3: Add `TestTasksInAnytimeExcludesOverdue` test**
 
 Add this test immediately after `TestTasksInTodayIncludesOverdue`:
 
@@ -222,7 +228,7 @@ func TestTasksInAnytimeExcludesOverdue(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Run new tests to verify they fail**
+- [x] **Step 4: Run new tests to verify they fail**
 
 Run:
 ```bash
@@ -238,7 +244,7 @@ Expected: All three FAIL. `TestTasksInTodayIncludesOverdue` — overdue tasks mi
 **Files:**
 - Modify: `sync/state.go:160-212`
 
-- [ ] **Step 1: Update `TasksInToday` query (lines 160-171)**
+- [x] **Step 1: Update `TasksInToday` query (lines 160-171)**
 
 Replace the doc comment and query:
 
@@ -274,7 +280,7 @@ func (st *State) TasksInToday(opts QueryOpts) ([]*things.Task, error) {
 	args := []any{tomorrowUnix, tomorrowUnix}
 ```
 
-- [ ] **Step 2: Update `TasksInAnytime` query (lines 194-202)**
+- [x] **Step 2: Update `TasksInAnytime` query (lines 194-202)**
 
 Replace the doc comment and query:
 
@@ -308,7 +314,7 @@ func (st *State) TasksInAnytime(opts QueryOpts) ([]*things.Task, error) {
 	args := []any{tomorrowUnix, tomorrowUnix}
 ```
 
-- [ ] **Step 3: Run tests to verify they pass**
+- [x] **Step 3: Run tests to verify they pass**
 
 Run:
 ```bash
@@ -317,16 +323,16 @@ go test -v -run "TestTasksInTodayIncludesOverdue|TestTasksInAnytimeExcludesOverd
 
 Expected: All three PASS.
 
-- [ ] **Step 4: Run full sync test suite for regressions**
+- [x] **Step 4: Run full sync test suite for regressions**
 
 Run:
 ```bash
 go test -v ./sync/...
 ```
 
-Expected: Exit code 1 (due to pre-existing `TestIntegration/query_change_log` failure). Verify that is the ONLY failing test — all other tests must pass.
+Expected: All tests pass. This was initially blocked by `TestIntegration/query_change_log`, but that test was later stabilized in follow-up commit `88d4a9c`.
 
-- [ ] **Step 5: Commit Piece A**
+- [x] **Step 5: Commit Piece A**
 
 ```bash
 git add sync/state.go sync/integration_test.go
@@ -348,7 +354,7 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 
 These tests exercise `taskLocationAt` and `detectTaskChanges`. They will fail because `isTodayAt` requires an exact calendar-day match.
 
-- [ ] **Step 1: Add `TestTaskLocationOverdue` test cases**
+- [x] **Step 1: Add `TestTaskLocationOverdue` test cases**
 
 Add these test cases inside `TestTaskLocation` (after the `"anytime schedule uses UTC day boundaries"` test at line 1091):
 
@@ -384,7 +390,7 @@ Add these test cases inside `TestTaskLocation` (after the `"anytime schedule use
 	})
 ```
 
-- [ ] **Step 2: Add `TestDetectOverdueTransition` test**
+- [x] **Step 2: Add `TestDetectOverdueTransition` test**
 
 Add this test after `TestTaskLocation` (after line 1131):
 
@@ -439,7 +445,7 @@ func TestDetectOverdueTransition(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Run new detect tests to verify they fail**
+- [x] **Step 3: Run new detect tests to verify they fail**
 
 Run:
 ```bash
@@ -455,7 +461,7 @@ Expected: All three new `TestTaskLocation` subtests FAIL (past dates return `Loc
 **Files:**
 - Modify: `sync/detect.go:138-157`
 
-- [ ] **Step 1: Add `isPastOrTodayAt` helper**
+- [x] **Step 1: Add `isPastOrTodayAt` helper**
 
 Add this function after `isTodayAt` (after line 170):
 
@@ -470,7 +476,7 @@ func isPastOrTodayAt(t *time.Time, now time.Time) bool {
 }
 ```
 
-- [ ] **Step 2: Update `taskLocationAt` to use `isPastOrTodayAt`**
+- [x] **Step 2: Update `taskLocationAt` to use `isPastOrTodayAt`**
 
 In `taskLocationAt` (line 146), replace:
 
@@ -492,7 +498,7 @@ With:
 		return LocationAnytime
 ```
 
-- [ ] **Step 3: Run detect tests to verify they pass**
+- [x] **Step 3: Run detect tests to verify they pass**
 
 Run:
 ```bash
@@ -501,16 +507,16 @@ go test -v -run "TestTaskLocation|TestDetectOverdueTransition" ./sync/
 
 Expected: All PASS, including the new overdue subtests and all existing `TestTaskLocation` cases.
 
-- [ ] **Step 4: Run full test suite for regressions**
+- [x] **Step 4: Run full test suite for regressions**
 
 Run:
 ```bash
 go test -v ./sync/...
 ```
 
-Expected: Exit code 1 (due to pre-existing `TestIntegration/query_change_log` failure). Verify that is the ONLY failing test — all other tests must pass.
+Expected: All tests pass. This was initially blocked by `TestIntegration/query_change_log`, but that test was later stabilized in follow-up commit `88d4a9c`.
 
-- [ ] **Step 5: Commit Piece B**
+- [x] **Step 5: Commit Piece B**
 
 ```bash
 git add sync/detect.go sync/detect_test.go
@@ -529,16 +535,16 @@ Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 
 **Files:** None modified — verification only.
 
-- [ ] **Step 1: Run full project test suite**
+- [x] **Step 1: Run full project test suite**
 
 Run:
 ```bash
 go test -v ./...
 ```
 
-Expected: Exit code 1 (due to pre-existing `TestIntegration/query_change_log` failure). Verify that is the ONLY failing test — all other tests must pass.
+Expected: `./sync/...` passes. A full `./...` run was completed during implementation, and the sync package no longer has the prior `query_change_log` blocker.
 
-- [ ] **Step 2: Start local server for E2E testing**
+- [x] **Step 2: Start local server for E2E testing**
 
 Start the server in the background using `run_in_background` (or `&`):
 ```bash
@@ -552,7 +558,7 @@ curl -s http://localhost:9090/ | python3 -c "import sys,json; print(json.loads(s
 
 Expected: `{'service': 'things-cloud-api', 'status': 'ok'}`.
 
-- [ ] **Step 3: Verify overdue task appears in Today**
+- [x] **Step 3: Verify overdue task appears in Today**
 
 Run:
 ```bash
@@ -567,9 +573,9 @@ print(f'Total: {len(tasks)} tasks in Today')
 "
 ```
 
-Expected: Any naturally overdue tasks (scheduled before today, still open) appear in the list. The dummy account has a task "Today is here!" scheduled for 2026-04-08, which will be overdue after that date.
+Expected: Any naturally overdue tasks (scheduled before today, still open) appear in the list. Verified with dummy account task `"Today is here! but soon overdue"` scheduled for `2026-04-08`.
 
-- [ ] **Step 4: Verify overdue task is NOT in Anytime**
+- [x] **Step 4: Verify overdue task is NOT in Anytime**
 
 Run:
 ```bash
@@ -586,7 +592,7 @@ print(f'Total: {len(tasks)} tasks in Anytime')
 
 Expected: No overdue tasks appear. Only tasks with `schedule=1` and no date (true Anytime tasks) are listed.
 
-- [ ] **Step 5: Run smoke tests**
+- [x] **Step 5: Run smoke tests**
 
 Run:
 ```bash
@@ -595,7 +601,7 @@ Run:
 
 Expected: 11/11 PASS.
 
-- [ ] **Step 6: Stop the local server**
+- [x] **Step 6: Stop the local server**
 
 ```bash
 lsof -ti:9090 | xargs kill 2>/dev/null; echo "Server stopped"
