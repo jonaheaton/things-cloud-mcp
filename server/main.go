@@ -386,7 +386,11 @@ func main() {
 	client.Debug = os.Getenv("DEBUG") == "true"
 
 	var err error
-	syncer, err = sync.Open("/data/things.db", client)
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "/data/things.db"
+	}
+	syncer, err = sync.Open(dbPath, client)
 	if err != nil {
 		log.Fatalf("failed to open sync database: %v", err)
 	}

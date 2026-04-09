@@ -100,4 +100,5 @@ The example app and real usage require:
 - `THINGS_PASSWORD` — Things account password
 - `API_KEY` — Bearer token for `/api/*` endpoints (optional, no auth if unset)
 - `PORT` — Server port (default: `8080`)
+- `DB_PATH` — SQLite database path (default: `/data/things.db`)
 - `DEBUG` — Enable verbose HTTP request/response logging when `true`
