@@ -20,8 +20,9 @@
 
 # Environment files
 *.env
-/tmp/
 .env
+.env.*
+/tmp/
 
 # HAR files (may contain credentials)
 *.har

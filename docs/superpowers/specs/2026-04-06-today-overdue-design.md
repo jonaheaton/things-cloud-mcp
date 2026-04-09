@@ -287,15 +287,33 @@ go test -v -run TestDetectOverdueTransition ./sync/
 go test -v ./...
 ```
 
-### End-to-End Verification (Optional, Needs Real Account)
+### End-to-End Verification (Needs Real Account)
 
-For confidence beyond unit tests:
+A dummy Things 3 account exists for local testing. Credentials are in `.env.test` (git-ignored).
 
-1. Start server locally: `THINGS_USERNAME=... THINGS_PASSWORD=... go run ./server/`
-2. Create a task scheduled for yesterday: `things_create_task` with `when: "2026-04-05"`
-3. Call `things_list_today` — task should appear
-4. Call `things_list_anytime` — task should NOT appear
-5. Run smoke test: `things_smoke_test` — should still pass
+**Important caveats discovered during testing:**
+
+- **`parseWhen()` normalizes past dates to today** (`server/write.go` line 521): You cannot create an overdue task via the API — `things_create_task` with `when: "yesterday"` will schedule the task for today. Overdue tasks only exist when a previously-scheduled task's date passes without completion.
+- **Pre-existing test failure**: `TestIntegration/query_change_log` fails (`expected 4 changes after index 0, got 0`). This is unrelated to the today/overdue fix and exists on main before any changes.
+- **Go path on macOS**: May need `export PATH="/opt/homebrew/bin:$PATH"` if Homebrew Go isn't in the default path.
+
+**Start the local server:**
+
+```bash
+# Load test credentials (or export manually)
+export $(grep -v '^#' .env.test | xargs)
+go run ./server/
+```
+
+**Verify the fix (before/after):**
+
+1. Call `things_list_today` — check for any naturally overdue tasks (tasks scheduled before today that were never completed)
+2. Call `things_list_anytime` — overdue tasks should NOT appear here after the fix
+3. Run smoke test: `./tests/test-smoke.sh http://localhost:9090` — should pass 11/11
+
+**To create a testable overdue task:**
+
+Since the API normalizes past dates, create a task scheduled for today, then wait 24+ hours before testing. Or use an account that already has overdue tasks (the dummy account has task "Today is here!" scheduled for 2026-04-08, which will be overdue after that date).
 
 ## Out of Scope
 
