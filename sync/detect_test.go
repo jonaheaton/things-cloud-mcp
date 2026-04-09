@@ -1090,6 +1090,36 @@ func TestTaskLocation(t *testing.T) {
 		}
 	})
 
+	t.Run("anytime schedule with past sr date", func(t *testing.T) {
+		t.Parallel()
+		yesterday := time.Now().AddDate(0, 0, -1)
+		task := &things.Task{Schedule: things.TaskScheduleAnytime, ScheduledDate: &yesterday}
+		loc := taskLocation(task)
+		if loc != LocationToday {
+			t.Errorf("expected LocationToday for overdue sr, got %v", loc)
+		}
+	})
+
+	t.Run("anytime schedule with past tir date", func(t *testing.T) {
+		t.Parallel()
+		threeDaysAgo := time.Now().AddDate(0, 0, -3)
+		task := &things.Task{Schedule: things.TaskScheduleAnytime, TodayIndexReference: &threeDaysAgo}
+		loc := taskLocation(task)
+		if loc != LocationToday {
+			t.Errorf("expected LocationToday for overdue tir, got %v", loc)
+		}
+	})
+
+	t.Run("anytime schedule with far past sr date", func(t *testing.T) {
+		t.Parallel()
+		monthAgo := time.Now().AddDate(0, -1, 0)
+		task := &things.Task{Schedule: things.TaskScheduleAnytime, ScheduledDate: &monthAgo}
+		loc := taskLocation(task)
+		if loc != LocationToday {
+			t.Errorf("expected LocationToday for overdue sr (30d), got %v", loc)
+		}
+	})
+
 	t.Run("someday schedule without date", func(t *testing.T) {
 		t.Parallel()
 		task := &things.Task{Schedule: things.TaskScheduleSomeday}
@@ -1126,6 +1156,55 @@ func TestTaskLocation(t *testing.T) {
 		loc := taskLocation(task)
 		if loc != LocationSomeday {
 			t.Errorf("expected LocationSomeday (past date), got %v", loc)
+		}
+	})
+}
+
+func TestDetectOverdueTransition(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+
+	t.Run("task with past date detected as today", func(t *testing.T) {
+		t.Parallel()
+		yesterday := time.Now().AddDate(0, 0, -1)
+		old := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleInbox}
+		new := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleAnytime, ScheduledDate: &yesterday}
+		changes := detectTaskChanges(old, new, 1, now)
+
+		found := false
+		for _, c := range changes {
+			if _, ok := c.(TaskMovedToToday); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("expected TaskMovedToToday for overdue task, got different changes")
+		}
+
+		for _, c := range changes {
+			if _, ok := c.(TaskMovedToAnytime); ok {
+				t.Error("overdue task should NOT generate TaskMovedToAnytime")
+			}
+		}
+	})
+
+	t.Run("task with past tir detected as today", func(t *testing.T) {
+		t.Parallel()
+		threeDaysAgo := time.Now().AddDate(0, 0, -3)
+		old := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleInbox}
+		new := &things.Task{UUID: "t1", Title: "Task", Type: things.TaskTypeTask, Schedule: things.TaskScheduleAnytime, TodayIndexReference: &threeDaysAgo}
+		changes := detectTaskChanges(old, new, 1, now)
+
+		found := false
+		for _, c := range changes {
+			if _, ok := c.(TaskMovedToToday); ok {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Error("expected TaskMovedToToday for overdue tir task")
 		}
 	})
 }

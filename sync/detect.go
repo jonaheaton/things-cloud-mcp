@@ -143,7 +143,7 @@ func taskLocationAt(t *things.Task, now time.Time) TaskLocation {
 	case things.TaskScheduleInbox:
 		return LocationInbox
 	case things.TaskScheduleAnytime:
-		if isTodayAt(t.ScheduledDate, now) || isTodayAt(t.TodayIndexReference, now) {
+		if isPastOrTodayAt(t.ScheduledDate, now) || isPastOrTodayAt(t.TodayIndexReference, now) {
 			return LocationToday
 		}
 		return LocationAnytime
@@ -167,6 +167,15 @@ func isTodayAt(t *time.Time, now time.Time) bool {
 	nowUTC := now.UTC()
 	targetUTC := t.UTC()
 	return targetUTC.Year() == nowUTC.Year() && targetUTC.YearDay() == nowUTC.YearDay()
+}
+
+func isPastOrTodayAt(t *time.Time, now time.Time) bool {
+	if t == nil {
+		return false
+	}
+	nowUTC := now.UTC()
+	tomorrow := time.Date(nowUTC.Year(), nowUTC.Month(), nowUTC.Day()+1, 0, 0, 0, 0, time.UTC)
+	return t.UTC().Before(tomorrow)
 }
 
 func isFutureAt(t *time.Time, now time.Time) bool {
