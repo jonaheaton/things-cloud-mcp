@@ -190,26 +190,113 @@ func TestIntegration(t *testing.T) {
 	})
 
 	t.Run("query change log", func(t *testing.T) {
-		// ChangesSinceIndex(0) returns changes with server_index > 0
-		// The test above adds two more task changes at indexes 10 and 11,
-		// so this should include indexes 1, 2, 10, and 11.
-		changes, err := syncer.ChangesSinceIndex(0)
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+
+		logSyncer, err := Open(dbPath, nil)
+		if err != nil {
+			t.Fatalf("Open failed: %v", err)
+		}
+		defer logSyncer.Close()
+
+		payload := things.TaskActionItemPayload{}
+		title := "Change log task"
+		payload.Title = &title
+		tp := things.TaskTypeTask
+		payload.Type = &tp
+
+		payloadBytes, _ := json.Marshal(payload)
+		createItem := things.Item{
+			UUID:   "change-log-task",
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionCreated,
+			P:      payloadBytes,
+		}
+		if _, err := logSyncer.processItems([]things.Item{createItem}, 0); err != nil {
+			t.Fatalf("processItems (create task) failed: %v", err)
+		}
+
+		modPayload := things.TaskActionItemPayload{}
+		updatedTitle := "Change log task updated"
+		modPayload.Title = &updatedTitle
+		modPayloadBytes, _ := json.Marshal(modPayload)
+		modItem := things.Item{
+			UUID:   "change-log-task",
+			Kind:   things.ItemKindTask,
+			Action: things.ItemActionModified,
+			P:      modPayloadBytes,
+		}
+		if _, err := logSyncer.processItems([]things.Item{modItem}, 1); err != nil {
+			t.Fatalf("processItems (modify task) failed: %v", err)
+		}
+
+		areaPayload := things.AreaActionItemPayload{}
+		areaTitle := "Change log area"
+		areaPayload.Title = &areaTitle
+		areaPayloadBytes, _ := json.Marshal(areaPayload)
+		areaItem := things.Item{
+			UUID:   "change-log-area",
+			Kind:   things.ItemKindArea3,
+			Action: things.ItemActionCreated,
+			P:      areaPayloadBytes,
+		}
+		if _, err := logSyncer.processItems([]things.Item{areaItem}, 2); err != nil {
+			t.Fatalf("processItems (create area) failed: %v", err)
+		}
+
+		// ChangesSinceIndex(0) returns changes with server_index > 0.
+		changes, err := logSyncer.ChangesSinceIndex(0)
 		if err != nil {
 			t.Fatalf("ChangesSinceIndex failed: %v", err)
 		}
 
-		if len(changes) != 4 {
-			t.Errorf("expected 4 changes after index 0, got %d", len(changes))
+		if len(changes) != 2 {
+			t.Fatalf("expected 2 changes after index 0, got %d", len(changes))
+		}
+		if changes[0].ServerIndex() != 1 || changes[0].ChangeType() != "UnknownChange" {
+			t.Errorf("first change after index 0 = (index=%d, type=%q), want (1, %q)", changes[0].ServerIndex(), changes[0].ChangeType(), "UnknownChange")
+		}
+		if changes[1].ServerIndex() != 2 || changes[1].ChangeType() != "UnknownChange" {
+			t.Errorf("second change after index 0 = (index=%d, type=%q), want (2, %q)", changes[1].ServerIndex(), changes[1].ChangeType(), "UnknownChange")
+		}
+
+		firstUnknown, ok := changes[0].(UnknownChange)
+		if !ok {
+			t.Fatalf("expected UnknownChange, got %T", changes[0])
+		}
+		if firstUnknown.Details != "TaskTitleChanged" {
+			t.Errorf("first change details = %q, want %q", firstUnknown.Details, "TaskTitleChanged")
+		}
+
+		secondUnknown, ok := changes[1].(UnknownChange)
+		if !ok {
+			t.Fatalf("expected UnknownChange, got %T", changes[1])
+		}
+		if secondUnknown.Details != "AreaCreated" {
+			t.Errorf("second change details = %q, want %q", secondUnknown.Details, "AreaCreated")
 		}
 
 		// Test ChangesSinceIndex(-1) to get all changes
-		allChanges, err := syncer.ChangesSinceIndex(-1)
+		allChanges, err := logSyncer.ChangesSinceIndex(-1)
 		if err != nil {
 			t.Fatalf("ChangesSinceIndex failed: %v", err)
 		}
 
-		if len(allChanges) != 5 {
-			t.Errorf("expected 5 total changes, got %d", len(allChanges))
+		if len(allChanges) != 3 {
+			t.Fatalf("expected 3 total changes, got %d", len(allChanges))
+		}
+
+		expectedDetails := []string{"TaskCreated", "TaskTitleChanged", "AreaCreated"}
+		for i, want := range expectedDetails {
+			unknown, ok := allChanges[i].(UnknownChange)
+			if !ok {
+				t.Fatalf("allChanges[%d] expected UnknownChange, got %T", i, allChanges[i])
+			}
+			if unknown.ServerIndex() != i {
+				t.Errorf("allChanges[%d] server index = %d, want %d", i, unknown.ServerIndex(), i)
+			}
+			if unknown.Details != want {
+				t.Errorf("allChanges[%d] details = %q, want %q", i, unknown.Details, want)
+			}
 		}
 	})
 }
